@@ -26,17 +26,17 @@ impl Tool for ShellTool {
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("Missing 'command'"))?;
 
-        let result = tokio::time::timeout(
-            SHELL_TIMEOUT,
-            Command::new("sh")
-                .arg("-c")
-                .arg(cmd)
-                .current_dir(&ctx.base_dir)
-                .output(),
-        )
-        .await;
+        let child = Command::new("sh")
+            .arg("-c")
+            .arg(cmd)
+            .current_dir(&ctx.base_dir)
+            .kill_on_drop(true)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .map_err(|e| anyhow::anyhow!("Shell spawn error: {e}"))?;
 
-        let output = match result {
+        let output = match tokio::time::timeout(SHELL_TIMEOUT, child.wait_with_output()).await {
             Ok(Ok(output)) => output,
             Ok(Err(e)) => {
                 return Ok(ToolResult {
@@ -44,6 +44,7 @@ impl Tool for ShellTool {
                 });
             }
             Err(_) => {
+                // kill_on_drop ensures the child is killed when `child` is dropped here
                 return Ok(ToolResult {
                     for_llm: format!("Shell timeout after {}s", SHELL_TIMEOUT.as_secs()),
                 });

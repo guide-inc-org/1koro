@@ -62,19 +62,24 @@ impl Agent {
             self.sessions.save_to_disk(&key, &session)?;
         }
 
+        // Persist user input immediately so it's never lost, even if tool_loop fails
+        session.messages.push(Message::user(text));
+        session.updated_at = Local::now();
+        self.sessions.save_to_disk(&key, &session)?;
+
+        if let Err(e) = self.memory.append_log(&format!("[{key}] {user}: {text}")) {
+            tracing::warn!("Failed to append log: {e}");
+        }
+
         let messages = ContextBuilder::build_messages(&self.memory, &session, text, &self.skills)?;
         let (response_text, new_messages) = self.tool_loop(messages).await?;
 
-        session.messages.push(Message::user(text));
         session.messages.extend(new_messages);
         session.updated_at = Local::now();
         self.sessions.save_to_disk(&key, &session)?;
 
         drop(session); // Release session lock before logging
 
-        if let Err(e) = self.memory.append_log(&format!("[{key}] {user}: {text}")) {
-            tracing::warn!("Failed to append log: {e}");
-        }
         if let Some(r) = &response_text
             && let Err(e) = self.memory.append_log(&format!("[{key}] 1koro: {r}"))
         {

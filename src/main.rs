@@ -139,5 +139,36 @@ async fn run(config_path: &str) -> Result<()> {
 }
 
 fn is_localhost(bind: &str) -> bool {
-    bind.starts_with("127.") || bind.starts_with("localhost") || bind.starts_with("[::1]")
+    // Extract the host part (before the last ':port')
+    let host = if let Some(bracket_end) = bind.find(']') {
+        // IPv6: [::1]:3000
+        &bind[..=bracket_end]
+    } else if let Some(colon) = bind.rfind(':') {
+        &bind[..colon]
+    } else {
+        bind
+    };
+    host == "localhost" || host == "127.0.0.1" || host == "[::1]" || host.starts_with("127.")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_is_localhost_loopback() {
+        assert!(is_localhost("127.0.0.1:3000"));
+        assert!(is_localhost("127.0.1.1:8080"));
+        assert!(is_localhost("localhost:3000"));
+        assert!(is_localhost("[::1]:3000"));
+    }
+
+    #[test]
+    fn test_is_localhost_rejects_non_local() {
+        assert!(!is_localhost("0.0.0.0:3000"));
+        assert!(!is_localhost("192.168.1.1:3000"));
+        assert!(!is_localhost("example.com:3000"));
+        // "localhost" prefix in a different hostname must not match
+        assert!(!is_localhost("localhost.evil.com:3000"));
+    }
 }
