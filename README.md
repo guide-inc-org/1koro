@@ -40,7 +40,7 @@ What if the agent didn't know what Slack was?
 │                                          │
 │  HTTP API + MCP + LLM + Memory + Shell   │
 │                                          │
-│  Rust single binary. ~1000 lines.        │
+│  Rust single binary. ~1200 lines.        │
 │  Slack? Never heard of it.               │
 │  Discord? What's that?                   │
 │  I only speak HTTP.                      │
@@ -178,7 +178,7 @@ For Claude Desktop / Claude mobile app. Exposes memory as tools:
 1. **The brain should only be a brain.** No channel code. No scheduling. No webhook management. HTTP in, HTTP out.
 2. **Memory is the moat.** Any chatbot can think. Only 1koro remembers everything and never forgets.
 3. **Grow through content, not code.** New skills = Markdown files. New channels = n8n workflows. New knowledge = MCP connections. The Rust binary stays the same.
-4. **Small is a feature.** Under 1,000 lines of Rust. Compiles in seconds. Runs on the smallest EC2 instance. Uses less RAM than your text editor.
+4. **Small is a feature.** ~1,200 lines of Rust. Compiles in seconds. Runs on the smallest EC2 instance. Uses less RAM than your text editor.
 
 ## Tech Stack
 

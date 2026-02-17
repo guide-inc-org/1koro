@@ -13,6 +13,7 @@ use crate::agent::Agent;
 #[derive(Clone)]
 pub struct AppState {
     pub agent: Arc<Mutex<Agent>>,
+    pub name: String,
 }
 
 #[derive(Deserialize)]
@@ -24,13 +25,8 @@ pub struct MessageRequest {
     pub user: String,
 }
 
-fn default_channel() -> String {
-    "cli".to_string()
-}
-
-fn default_user() -> String {
-    "masaki".to_string()
-}
+fn default_channel() -> String { "cli".into() }
+fn default_user() -> String { "masaki".into() }
 
 #[derive(Serialize)]
 pub struct MessageResponse {
@@ -46,40 +42,27 @@ pub fn router(state: AppState) -> Router {
         .with_state(state)
 }
 
-async fn handle_message(
-    State(state): State<AppState>,
-    Json(req): Json<MessageRequest>,
-) -> impl IntoResponse {
-    tracing::info!("[{}:{}] {}", req.channel, req.user, req.text);
-
+async fn handle_message(State(state): State<AppState>, Json(req): Json<MessageRequest>) -> impl IntoResponse {
     let mut agent = state.agent.lock().await;
-    match agent
-        .handle_message(&req.text, &req.channel, &req.user)
-        .await
-    {
-        Ok(resp) => (
-            StatusCode::OK,
-            Json(MessageResponse {
-                text: resp.text.unwrap_or_else(|| "(no response)".to_string()),
-                actions: resp.actions,
-            }),
-        ),
+    match agent.handle_message(&req.text, &req.channel, &req.user).await {
+        Ok(resp) => (StatusCode::OK, Json(MessageResponse {
+            text: resp.text.unwrap_or_else(|| "(no response)".into()),
+            actions: resp.actions,
+        })),
         Err(e) => {
             tracing::error!("Agent error: {e}");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(MessageResponse {
-                    text: format!("Error: {e}"),
-                    actions: vec![],
-                }),
-            )
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(MessageResponse {
+                text: format!("Error: {e}"),
+                actions: vec![],
+            }))
         }
     }
 }
 
-async fn handle_health() -> impl IntoResponse {
+async fn handle_health(State(state): State<AppState>) -> impl IntoResponse {
     Json(serde_json::json!({
         "status": "ok",
+        "name": state.name,
         "version": env!("CARGO_PKG_VERSION"),
     }))
 }

@@ -1,5 +1,4 @@
 pub mod file;
-pub mod import;
 pub mod memory;
 pub mod shell;
 
@@ -13,13 +12,10 @@ use serde_json::Value;
 use crate::llm::{FunctionDef, ToolDef};
 use crate::memory::MemoryManager;
 
-/// Result from tool execution (PicoClaw pattern: separate LLM vs user content).
 pub struct ToolResult {
     pub for_llm: String,
-    pub for_user: Option<String>,
 }
 
-/// Context passed to every tool execution.
 pub struct ToolContext {
     pub memory: Arc<MemoryManager>,
     pub base_dir: PathBuf,
@@ -40,10 +36,7 @@ pub struct ToolRegistry {
 
 impl ToolRegistry {
     pub fn new(ctx: ToolContext) -> Self {
-        Self {
-            tools: HashMap::new(),
-            ctx,
-        }
+        Self { tools: HashMap::new(), ctx }
     }
 
     pub fn register(&mut self, tool: Box<dyn Tool>) {
@@ -51,26 +44,19 @@ impl ToolRegistry {
     }
 
     pub fn tool_defs(&self) -> Vec<ToolDef> {
-        self.tools
-            .values()
-            .map(|t| ToolDef {
-                type_: "function".to_string(),
-                function: FunctionDef {
-                    name: t.name().to_string(),
-                    description: t.description().to_string(),
-                    parameters: t.parameters(),
-                },
-            })
-            .collect()
+        self.tools.values().map(|t| ToolDef {
+            type_: "function".into(),
+            function: FunctionDef {
+                name: t.name().into(),
+                description: t.description().into(),
+                parameters: t.parameters(),
+            },
+        }).collect()
     }
 
     pub async fn execute(&self, name: &str, args_json: &str) -> Result<ToolResult> {
-        let tool = self
-            .tools
-            .get(name)
-            .ok_or_else(|| anyhow::anyhow!("Unknown tool: {name}"))?;
-        let args: Value =
-            serde_json::from_str(args_json).unwrap_or(Value::Object(Default::default()));
+        let tool = self.tools.get(name).ok_or_else(|| anyhow::anyhow!("Unknown tool: {name}"))?;
+        let args: Value = serde_json::from_str(args_json).unwrap_or(Value::Object(Default::default()));
         tool.execute(args, &self.ctx).await
     }
 }
