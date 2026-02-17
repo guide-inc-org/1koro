@@ -17,9 +17,15 @@ impl Tool for SearchLogsTool {
         json!({ "type": "object", "properties": { "query": { "type": "string" } }, "required": ["query"] })
     }
     async fn execute(&self, args: Value, ctx: &ToolContext) -> Result<ToolResult> {
-        let results = ctx
-            .memory
-            .search_logs(args["query"].as_str().unwrap_or(""))?;
+        let query = args["query"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Missing required 'query' parameter"))?;
+        if query.is_empty() {
+            return Ok(ToolResult {
+                for_llm: "Error: 'query' must not be empty".into(),
+            });
+        }
+        let results = ctx.memory.search_logs(query)?;
         Ok(ToolResult {
             for_llm: if results.is_empty() {
                 "No results found.".into()
@@ -44,10 +50,11 @@ impl Tool for ReadCoreMemoryTool {
         json!({ "type": "object", "properties": { "file": { "type": "string", "enum": ["identity.md", "user.md", "state.md"] } }, "required": ["file"] })
     }
     async fn execute(&self, args: Value, ctx: &ToolContext) -> Result<ToolResult> {
+        let file = args["file"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Missing required 'file' parameter"))?;
         Ok(ToolResult {
-            for_llm: ctx
-                .memory
-                .read_core(args["file"].as_str().unwrap_or("state.md"))?,
+            for_llm: ctx.memory.read_core(file)?,
         })
     }
 }
@@ -66,14 +73,18 @@ impl Tool for UpdateCoreMemoryTool {
         json!({ "type": "object", "properties": { "file": { "type": "string", "enum": ["user.md", "state.md"] }, "content": { "type": "string" } }, "required": ["file", "content"] })
     }
     async fn execute(&self, args: Value, ctx: &ToolContext) -> Result<ToolResult> {
-        let file = args["file"].as_str().unwrap_or("state.md");
-        if file == "identity.md" {
+        let file = args["file"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Missing required 'file' parameter"))?;
+        let content = args["content"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Missing required 'content' parameter"))?;
+        if content.is_empty() {
             return Ok(ToolResult {
-                for_llm: "Error: identity.md is read-only".into(),
+                for_llm: "Error: 'content' must not be empty".into(),
             });
         }
-        ctx.memory
-            .write_core(file, args["content"].as_str().unwrap_or(""))?;
+        ctx.memory.write_core(file, content)?;
         Ok(ToolResult {
             for_llm: format!("Updated {file}"),
         })
@@ -94,7 +105,9 @@ impl Tool for ReadDailyLogTool {
         json!({ "type": "object", "properties": { "date": { "type": "string" } }, "required": ["date"] })
     }
     async fn execute(&self, args: Value, ctx: &ToolContext) -> Result<ToolResult> {
-        let date = args["date"].as_str().unwrap_or("");
+        let date = args["date"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Missing required 'date' parameter"))?;
         Ok(ToolResult {
             for_llm: ctx
                 .memory
@@ -122,12 +135,18 @@ impl Tool for WriteSummaryTool {
         }, "required": ["period", "id", "content"] })
     }
     async fn execute(&self, args: Value, ctx: &ToolContext) -> Result<ToolResult> {
-        let period = args["period"].as_str().unwrap_or("weekly");
-        let id = args["id"].as_str().unwrap_or("");
-        let content = args["content"].as_str().unwrap_or("");
+        let period = args["period"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Missing required 'period' parameter"))?;
+        let id = args["id"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Missing required 'id' parameter"))?;
+        let content = args["content"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Missing required 'content' parameter"))?;
         if id.is_empty() || content.is_empty() {
             return Ok(ToolResult {
-                for_llm: "Error: id and content required".into(),
+                for_llm: "Error: 'id' and 'content' must not be empty".into(),
             });
         }
         match period {
@@ -159,7 +178,15 @@ impl Tool for AppendLogTool {
         json!({ "type": "object", "properties": { "text": { "type": "string" } }, "required": ["text"] })
     }
     async fn execute(&self, args: Value, ctx: &ToolContext) -> Result<ToolResult> {
-        ctx.memory.append_log(args["text"].as_str().unwrap_or(""))?;
+        let text = args["text"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Missing required 'text' parameter"))?;
+        if text.is_empty() {
+            return Ok(ToolResult {
+                for_llm: "Error: 'text' must not be empty".into(),
+            });
+        }
+        ctx.memory.append_log(text)?;
         Ok(ToolResult {
             for_llm: "Note appended.".into(),
         })

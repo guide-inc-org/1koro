@@ -11,13 +11,15 @@ impl Tool for ReadFileTool {
         "read_file"
     }
     fn description(&self) -> &str {
-        "Read file contents within the workspace directory."
+        "Read file contents within the memory directory (~/.1koro)"
     }
     fn parameters(&self) -> Value {
         json!({ "type": "object", "properties": { "path": { "type": "string", "description": "File path relative to workspace" } }, "required": ["path"] })
     }
     async fn execute(&self, args: Value, ctx: &ToolContext) -> Result<ToolResult> {
-        let path_str = args["path"].as_str().unwrap_or("");
+        let path_str = args["path"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Missing required 'path' parameter"))?;
         let path = if path_str.starts_with('/') {
             std::path::PathBuf::from(path_str)
         } else {

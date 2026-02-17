@@ -16,7 +16,7 @@ impl Tool for ShellTool {
         "shell"
     }
     fn description(&self) -> &str {
-        "Execute a shell command (30s timeout, runs in workspace directory)"
+        "Execute a shell command (30s timeout, runs in memory directory)"
     }
     fn parameters(&self) -> Value {
         json!({ "type": "object", "properties": { "command": { "type": "string", "description": "Shell command to execute" } }, "required": ["command"] })
@@ -36,7 +36,7 @@ impl Tool for ShellTool {
             .spawn()
             .map_err(|e| anyhow::anyhow!("Shell spawn error: {e}"))?;
 
-        let pid = child.id().unwrap_or(0) as i32;
+        let pgid = child.id().unwrap_or(0) as i32;
 
         let output = match tokio::time::timeout(SHELL_TIMEOUT, child.wait_with_output()).await {
             Ok(Ok(output)) => output,
@@ -46,10 +46,14 @@ impl Tool for ShellTool {
                 });
             }
             Err(_) => {
-                // Kill the entire process group (sh + all children)
-                if pid > 0 {
+                // Kill the entire process group (sh + all children), then reap
+                if pgid > 0 {
                     unsafe {
-                        libc::killpg(pid, libc::SIGKILL);
+                        libc::killpg(pgid, libc::SIGKILL);
+                    }
+                    // waitpid to reap zombie; WNOHANG avoids blocking if already reaped
+                    unsafe {
+                        libc::waitpid(-pgid, std::ptr::null_mut(), libc::WNOHANG);
                     }
                 }
                 return Ok(ToolResult {

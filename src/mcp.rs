@@ -157,22 +157,41 @@ async fn tools_call(
         .ok_or((-32602, "Missing tool name".into()))?;
     let args = &params["arguments"];
     let text = match name {
-        "read_core_memory" => state
-            .memory
-            .read_core(args["file"].as_str().unwrap_or("state.md"))
-            .map_err(|e| (-32000, e.to_string()))?,
-        "update_core_memory" => {
-            let file = args["file"].as_str().unwrap_or("state.md");
+        "read_core_memory" => {
+            let file = args["file"]
+                .as_str()
+                .ok_or((-32602, "Missing required 'file' parameter".to_string()))?;
             state
                 .memory
-                .write_core(file, args["content"].as_str().unwrap_or(""))
+                .read_core(file)
+                .map_err(|e| (-32000, e.to_string()))?
+        }
+        "update_core_memory" => {
+            let file = args["file"]
+                .as_str()
+                .ok_or((-32602, "Missing required 'file' parameter".to_string()))?;
+            let content = args["content"]
+                .as_str()
+                .ok_or((-32602, "Missing required 'content' parameter".to_string()))?;
+            if content.is_empty() {
+                return Err((-32602, "'content' must not be empty".to_string()));
+            }
+            state
+                .memory
+                .write_core(file, content)
                 .map_err(|e| (-32000, e.to_string()))?;
             format!("Updated {file}")
         }
         "search_logs" => {
+            let query = args["query"]
+                .as_str()
+                .ok_or((-32602, "Missing required 'query' parameter".to_string()))?;
+            if query.is_empty() {
+                return Err((-32602, "'query' must not be empty".to_string()));
+            }
             let r = state
                 .memory
-                .search_logs(args["query"].as_str().unwrap_or(""))
+                .search_logs(query)
                 .map_err(|e| (-32000, e.to_string()))?;
             if r.is_empty() {
                 "No results found.".into()
@@ -181,7 +200,9 @@ async fn tools_call(
             }
         }
         "read_daily_log" => {
-            let d = args["date"].as_str().unwrap_or("");
+            let d = args["date"]
+                .as_str()
+                .ok_or((-32602, "Missing required 'date' parameter".to_string()))?;
             state
                 .memory
                 .read_daily_log(d)
