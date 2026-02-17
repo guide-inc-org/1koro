@@ -142,9 +142,11 @@ fn is_localhost(bind: &str) -> bool {
     use std::net::IpAddr;
 
     // Extract the host part (before the last ':port')
-    let host = if let Some(bracket_end) = bind.find(']') {
-        // IPv6 bracket notation: strip brackets for parsing
-        &bind[1..bracket_end]
+    let host = if let Some(inner) = bind.strip_prefix('[')
+        && let Some(bracket_end) = inner.find(']')
+    {
+        // IPv6 bracket notation: [::1]:3000 → ::1
+        &inner[..bracket_end]
     } else if let Some(colon) = bind.rfind(':') {
         &bind[..colon]
     } else {
@@ -181,5 +183,16 @@ mod tests {
         assert!(!is_localhost("127.0.0.evil:3000"));
         // Invalid IP format must not be treated as loopback
         assert!(!is_localhost("127.0.0.1.1:3000"));
+    }
+
+    #[test]
+    fn test_is_localhost_malformed_no_panic() {
+        // Must not panic on any malformed input
+        assert!(!is_localhost("]"));
+        assert!(!is_localhost("[]"));
+        assert!(!is_localhost("["));
+        assert!(!is_localhost(""));
+        assert!(!is_localhost(":"));
+        assert!(!is_localhost("[]:3000"));
     }
 }
