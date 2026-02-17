@@ -62,7 +62,7 @@ impl Tool for ShellTool {
                         if ret != 0 {
                             break;
                         }
-                        std::thread::sleep(Duration::from_millis(10));
+                        tokio::time::sleep(Duration::from_millis(10)).await;
                     }
                 }
                 return Ok(ToolResult {

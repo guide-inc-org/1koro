@@ -123,9 +123,6 @@ impl MemoryManager {
             .open(&path)
             .with_context(|| format!("Failed to open log: {}", path.display()))?;
 
-        if file.metadata()?.len() == 0 {
-            writeln!(file, "# {today}\n")?;
-        }
         writeln!(file, "- {entry}")
             .with_context(|| format!("Failed to append to log: {}", path.display()))
     }
