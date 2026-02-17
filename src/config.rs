@@ -42,14 +42,14 @@ pub struct ChannelsConfig {
     pub discord: Option<DiscordConfig>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct SlackConfig {
     pub enabled: bool,
     pub bot_token: String,
     pub app_token: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct DiscordConfig {
     pub enabled: bool,
     pub token: String,

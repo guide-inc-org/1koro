@@ -6,55 +6,124 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::LlmConfig;
 
+// --- Message ---
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Message {
     pub role: String,
-    pub content: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_calls: Option<Vec<ToolCall>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
 }
 
 impl Message {
     pub fn system(content: impl Into<String>) -> Self {
         Self {
-            role: "system".to_string(),
-            content: content.into(),
+            role: "system".into(),
+            content: Some(content.into()),
+            tool_calls: None,
+            tool_call_id: None,
         }
     }
 
     pub fn user(content: impl Into<String>) -> Self {
         Self {
-            role: "user".to_string(),
-            content: content.into(),
+            role: "user".into(),
+            content: Some(content.into()),
+            tool_calls: None,
+            tool_call_id: None,
         }
     }
 
     pub fn assistant(content: impl Into<String>) -> Self {
         Self {
-            role: "assistant".to_string(),
-            content: content.into(),
+            role: "assistant".into(),
+            content: Some(content.into()),
+            tool_calls: None,
+            tool_call_id: None,
+        }
+    }
+
+    pub fn assistant_with_tool_calls(
+        content: Option<String>,
+        tool_calls: Vec<ToolCall>,
+    ) -> Self {
+        Self {
+            role: "assistant".into(),
+            content,
+            tool_calls: Some(tool_calls),
+            tool_call_id: None,
+        }
+    }
+
+    pub fn tool_result(
+        tool_call_id: impl Into<String>,
+        content: impl Into<String>,
+    ) -> Self {
+        Self {
+            role: "tool".into(),
+            content: Some(content.into()),
+            tool_calls: None,
+            tool_call_id: Some(tool_call_id.into()),
         }
     }
 }
 
-/// Object-safe LLM client trait.
-#[async_trait::async_trait]
-pub trait LlmClient: Send + Sync {
-    async fn chat(&self, messages: Vec<Message>) -> Result<String>;
+// --- Tool definitions (sent to LLM in request) ---
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ToolDef {
+    #[serde(rename = "type")]
+    pub type_: String,
+    pub function: FunctionDef,
 }
 
-/// Create an LLM client from config.
-///
-/// Supported providers:
-/// - "openai"       → OpenAI (default: https://api.openai.com/v1)
-/// - "minimax"      → MiniMax (default: https://api.minimaxi.chat/v1)
-/// - "openrouter"   → OpenRouter (default: https://openrouter.ai/api/v1)
-/// - "google"       → Google Gemini OpenAI-compat (default: https://generativelanguage.googleapis.com/v1beta/openai)
-/// - "groq"         → Groq (default: https://api.groq.com/openai/v1)
-/// - "together"     → Together AI (default: https://api.together.xyz/v1)
-/// - "deepseek"     → DeepSeek (default: https://api.deepseek.com/v1)
-/// - "anthropic"    → Anthropic Messages API (separate implementation)
-///
-/// Any provider except "anthropic" uses the OpenAI-compatible client.
-/// You can override the base_url in config for custom/self-hosted endpoints.
+#[derive(Debug, Clone, Serialize)]
+pub struct FunctionDef {
+    pub name: String,
+    pub description: String,
+    pub parameters: serde_json::Value,
+}
+
+// --- Tool calls (from LLM response) ---
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolCall {
+    pub id: String,
+    #[serde(rename = "type")]
+    pub type_: String,
+    pub function: FunctionCall,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FunctionCall {
+    pub name: String,
+    pub arguments: String,
+}
+
+// --- LLM Response ---
+
+pub struct LlmResponse {
+    pub content: Option<String>,
+    pub tool_calls: Vec<ToolCall>,
+}
+
+// --- LLM Client trait ---
+
+#[async_trait::async_trait]
+pub trait LlmClient: Send + Sync {
+    async fn chat(
+        &self,
+        messages: Vec<Message>,
+        tools: Option<&[ToolDef]>,
+    ) -> Result<LlmResponse>;
+}
+
+// --- Factory ---
+
 pub fn create_client(config: &LlmConfig) -> Result<Box<dyn LlmClient>> {
     match config.provider.as_str() {
         "anthropic" => Ok(Box::new(anthropic::AnthropicClient::new(config)?)),

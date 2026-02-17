@@ -2,14 +2,9 @@ use anyhow::{Context, Result};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 
-use super::{LlmClient, Message};
+use super::{FunctionCall, LlmClient, LlmResponse, Message, ToolCall, ToolDef};
 use crate::config::LlmConfig;
 
-/// Generic client for any OpenAI-compatible chat completions API.
-///
-/// Works with: OpenAI, MiniMax, OpenRouter, Google Gemini, Groq,
-/// Together AI, DeepSeek, vLLM, Ollama, LiteLLM, and any other
-/// provider that implements the `/chat/completions` endpoint.
 pub struct OpenAICompatibleClient {
     client: Client,
     base_url: String,
@@ -23,6 +18,8 @@ struct ChatRequest {
     model: String,
     messages: Vec<Message>,
     max_tokens: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tools: Option<Vec<ToolDef>>,
 }
 
 #[derive(Deserialize)]
@@ -32,12 +29,29 @@ struct ChatResponse {
 
 #[derive(Deserialize)]
 struct Choice {
-    message: MessageContent,
+    message: ResponseMessage,
 }
 
 #[derive(Deserialize)]
-struct MessageContent {
-    content: String,
+struct ResponseMessage {
+    #[serde(default)]
+    content: Option<String>,
+    #[serde(default)]
+    tool_calls: Option<Vec<ResponseToolCall>>,
+}
+
+#[derive(Deserialize)]
+struct ResponseToolCall {
+    id: String,
+    #[serde(rename = "type")]
+    type_: String,
+    function: ResponseFunctionCall,
+}
+
+#[derive(Deserialize)]
+struct ResponseFunctionCall {
+    name: String,
+    arguments: String,
 }
 
 impl OpenAICompatibleClient {
@@ -54,13 +68,18 @@ impl OpenAICompatibleClient {
 
 #[async_trait::async_trait]
 impl LlmClient for OpenAICompatibleClient {
-    async fn chat(&self, messages: Vec<Message>) -> Result<String> {
+    async fn chat(
+        &self,
+        messages: Vec<Message>,
+        tools: Option<&[ToolDef]>,
+    ) -> Result<LlmResponse> {
         let url = format!("{}/chat/completions", self.base_url);
 
         let request = ChatRequest {
             model: self.model.clone(),
             messages,
             max_tokens: self.max_tokens,
+            tools: tools.map(|t| t.to_vec()),
         };
 
         let response = self
@@ -84,9 +103,32 @@ impl LlmClient for OpenAICompatibleClient {
             .await
             .context("Failed to parse LLM response")?;
 
-        body.choices
+        let choice = body
+            .choices
             .first()
-            .map(|c| c.message.content.clone())
-            .ok_or_else(|| anyhow::anyhow!("Empty response from LLM"))
+            .ok_or_else(|| anyhow::anyhow!("Empty response from LLM"))?;
+
+        let tool_calls = choice
+            .message
+            .tool_calls
+            .as_ref()
+            .map(|tcs| {
+                tcs.iter()
+                    .map(|tc| ToolCall {
+                        id: tc.id.clone(),
+                        type_: tc.type_.clone(),
+                        function: FunctionCall {
+                            name: tc.function.name.clone(),
+                            arguments: tc.function.arguments.clone(),
+                        },
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        Ok(LlmResponse {
+            content: choice.message.content.clone(),
+            tool_calls,
+        })
     }
 }

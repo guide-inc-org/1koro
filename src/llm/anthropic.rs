@@ -2,16 +2,12 @@ use anyhow::{Context, Result};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 
-use super::{LlmClient, Message};
+use super::{FunctionCall, LlmClient, LlmResponse, Message, ToolCall, ToolDef};
 use crate::config::LlmConfig;
 
 const DEFAULT_BASE_URL: &str = "https://api.anthropic.com";
 const API_VERSION: &str = "2023-06-01";
 
-/// Client for Anthropic's Messages API.
-///
-/// Anthropic uses a different request/response format from OpenAI,
-/// so it needs its own implementation.
 pub struct AnthropicClient {
     client: Client,
     base_url: String,
@@ -20,6 +16,8 @@ pub struct AnthropicClient {
     max_tokens: u32,
 }
 
+// --- Request types ---
+
 #[derive(Serialize)]
 struct AnthropicRequest {
     model: String,
@@ -27,22 +25,66 @@ struct AnthropicRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     system: Option<String>,
     messages: Vec<AnthropicMessage>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tools: Option<Vec<AnthropicToolDef>>,
+}
+
+#[derive(Serialize)]
+struct AnthropicToolDef {
+    name: String,
+    description: String,
+    input_schema: serde_json::Value,
 }
 
 #[derive(Serialize)]
 struct AnthropicMessage {
     role: String,
-    content: String,
+    content: AnthropicContent,
 }
+
+#[derive(Serialize)]
+#[serde(untagged)]
+enum AnthropicContent {
+    Text(String),
+    Blocks(Vec<ContentBlock>),
+}
+
+#[derive(Serialize)]
+#[serde(tag = "type")]
+enum ContentBlock {
+    #[serde(rename = "text")]
+    Text { text: String },
+    #[serde(rename = "tool_use")]
+    ToolUse {
+        id: String,
+        name: String,
+        input: serde_json::Value,
+    },
+    #[serde(rename = "tool_result")]
+    ToolResult {
+        tool_use_id: String,
+        content: String,
+    },
+}
+
+// --- Response types ---
 
 #[derive(Deserialize)]
 struct AnthropicResponse {
-    content: Vec<ContentBlock>,
+    content: Vec<ResponseBlock>,
 }
 
 #[derive(Deserialize)]
-struct ContentBlock {
-    text: Option<String>,
+#[serde(tag = "type")]
+enum ResponseBlock {
+    #[serde(rename = "text")]
+    Text { text: String },
+    #[serde(rename = "tool_use")]
+    ToolUse {
+        id: String,
+        name: String,
+        input: serde_json::Value,
+    },
 }
 
 impl AnthropicClient {
@@ -60,33 +102,119 @@ impl AnthropicClient {
             max_tokens: config.max_tokens,
         })
     }
+
+    fn convert_tools(tools: &[ToolDef]) -> Vec<AnthropicToolDef> {
+        tools
+            .iter()
+            .map(|t| AnthropicToolDef {
+                name: t.function.name.clone(),
+                description: t.function.description.clone(),
+                input_schema: t.function.parameters.clone(),
+            })
+            .collect()
+    }
+
+    fn convert_messages(messages: &[Message]) -> (Option<String>, Vec<AnthropicMessage>) {
+        let mut system: Option<String> = None;
+        let mut result: Vec<AnthropicMessage> = Vec::new();
+
+        for msg in messages {
+            match msg.role.as_str() {
+                "system" => {
+                    let text = msg.content.clone().unwrap_or_default();
+                    match &mut system {
+                        Some(s) => {
+                            s.push_str("\n\n");
+                            s.push_str(&text);
+                        }
+                        None => system = Some(text),
+                    }
+                }
+                "user" => {
+                    result.push(AnthropicMessage {
+                        role: "user".to_string(),
+                        content: AnthropicContent::Text(
+                            msg.content.clone().unwrap_or_default(),
+                        ),
+                    });
+                }
+                "assistant" => {
+                    let mut blocks = Vec::new();
+                    if let Some(text) = &msg.content {
+                        if !text.is_empty() {
+                            blocks.push(ContentBlock::Text { text: text.clone() });
+                        }
+                    }
+                    if let Some(tool_calls) = &msg.tool_calls {
+                        for tc in tool_calls {
+                            let input: serde_json::Value =
+                                serde_json::from_str(&tc.function.arguments)
+                                    .unwrap_or(serde_json::Value::Object(Default::default()));
+                            blocks.push(ContentBlock::ToolUse {
+                                id: tc.id.clone(),
+                                name: tc.function.name.clone(),
+                                input,
+                            });
+                        }
+                    }
+                    if blocks.is_empty() {
+                        blocks.push(ContentBlock::Text {
+                            text: String::new(),
+                        });
+                    }
+                    result.push(AnthropicMessage {
+                        role: "assistant".to_string(),
+                        content: AnthropicContent::Blocks(blocks),
+                    });
+                }
+                "tool" => {
+                    let block = ContentBlock::ToolResult {
+                        tool_use_id: msg.tool_call_id.clone().unwrap_or_default(),
+                        content: msg.content.clone().unwrap_or_default(),
+                    };
+                    // Merge consecutive tool results into one user message
+                    if let Some(last) = result.last_mut() {
+                        if last.role == "user" {
+                            if let AnthropicContent::Blocks(ref mut blocks) = last.content {
+                                if blocks
+                                    .iter()
+                                    .all(|b| matches!(b, ContentBlock::ToolResult { .. }))
+                                {
+                                    blocks.push(block);
+                                    continue;
+                                }
+                            }
+                        }
+                    }
+                    result.push(AnthropicMessage {
+                        role: "user".to_string(),
+                        content: AnthropicContent::Blocks(vec![block]),
+                    });
+                }
+                _ => {}
+            }
+        }
+
+        (system, result)
+    }
 }
 
 #[async_trait::async_trait]
 impl LlmClient for AnthropicClient {
-    async fn chat(&self, messages: Vec<Message>) -> Result<String> {
+    async fn chat(
+        &self,
+        messages: Vec<Message>,
+        tools: Option<&[ToolDef]>,
+    ) -> Result<LlmResponse> {
         let url = format!("{}/v1/messages", self.base_url);
-
-        // Extract system message (Anthropic puts it as a top-level field)
-        let mut system = None;
-        let mut api_messages = Vec::new();
-
-        for msg in messages {
-            if msg.role == "system" {
-                system = Some(msg.content);
-            } else {
-                api_messages.push(AnthropicMessage {
-                    role: msg.role,
-                    content: msg.content,
-                });
-            }
-        }
+        let (system, api_messages) = Self::convert_messages(&messages);
 
         let request = AnthropicRequest {
             model: self.model.clone(),
             max_tokens: self.max_tokens,
             system,
             messages: api_messages,
+            tools: tools.map(Self::convert_tools),
         };
 
         let response = self
@@ -98,7 +226,7 @@ impl LlmClient for AnthropicClient {
             .json(&request)
             .send()
             .await
-            .with_context(|| "Failed to call Anthropic API")?;
+            .context("Failed to call Anthropic API")?;
 
         let status = response.status();
         if !status.is_success() {
@@ -111,11 +239,25 @@ impl LlmClient for AnthropicClient {
             .await
             .context("Failed to parse Anthropic response")?;
 
-        body.content
-            .iter()
-            .filter_map(|b| b.text.as_ref())
-            .next()
-            .cloned()
-            .ok_or_else(|| anyhow::anyhow!("Empty response from Anthropic"))
+        let mut content = None;
+        let mut tool_calls = Vec::new();
+
+        for block in body.content {
+            match block {
+                ResponseBlock::Text { text } => content = Some(text),
+                ResponseBlock::ToolUse { id, name, input } => {
+                    tool_calls.push(ToolCall {
+                        id,
+                        type_: "function".to_string(),
+                        function: FunctionCall {
+                            name,
+                            arguments: serde_json::to_string(&input)?,
+                        },
+                    });
+                }
+            }
+        }
+
+        Ok(LlmResponse { content, tool_calls })
     }
 }
