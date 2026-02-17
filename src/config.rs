@@ -24,6 +24,8 @@ pub struct AgentConfig {
 #[derive(Debug, Deserialize)]
 pub struct LlmConfig {
     pub provider: String,
+    /// Base URL for the API. Optional — each provider has a sensible default.
+    pub base_url: Option<String>,
     pub model: String,
     pub api_key: String,
     #[serde(default = "default_max_tokens")]
@@ -178,9 +180,23 @@ name = "1koro"
 
 [llm]
 provider = "minimax"
-model = "M2.5"
+# base_url = "https://api.minimaxi.chat/v1"  # optional, uses provider default
+model = "MiniMax-M1"
 api_key = "YOUR_API_KEY"
 max_tokens = 8192
+
+# Other provider examples:
+# provider = "openai"
+# model = "gpt-4o"
+#
+# provider = "openrouter"
+# model = "anthropic/claude-sonnet-4"
+#
+# provider = "anthropic"
+# model = "claude-sonnet-4-5-20250929"
+#
+# provider = "google"
+# model = "gemini-2.5-pro"
 
 # [channels.slack]
 # enabled = true
