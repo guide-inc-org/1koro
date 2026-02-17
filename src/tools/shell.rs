@@ -30,11 +30,13 @@ impl Tool for ShellTool {
             .arg("-c")
             .arg(cmd)
             .current_dir(&ctx.base_dir)
-            .kill_on_drop(true)
+            .process_group(0) // new process group so we can kill all descendants
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .spawn()
             .map_err(|e| anyhow::anyhow!("Shell spawn error: {e}"))?;
+
+        let pid = child.id().unwrap_or(0) as i32;
 
         let output = match tokio::time::timeout(SHELL_TIMEOUT, child.wait_with_output()).await {
             Ok(Ok(output)) => output,
@@ -44,7 +46,12 @@ impl Tool for ShellTool {
                 });
             }
             Err(_) => {
-                // kill_on_drop ensures the child is killed when `child` is dropped here
+                // Kill the entire process group (sh + all children)
+                if pid > 0 {
+                    unsafe {
+                        libc::killpg(pid, libc::SIGKILL);
+                    }
+                }
                 return Ok(ToolResult {
                     for_llm: format!("Shell timeout after {}s", SHELL_TIMEOUT.as_secs()),
                 });

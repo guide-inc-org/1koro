@@ -71,7 +71,7 @@ impl Agent {
             tracing::warn!("Failed to append log: {e}");
         }
 
-        let messages = ContextBuilder::build_messages(&self.memory, &session, text, &self.skills)?;
+        let messages = ContextBuilder::build_messages(&self.memory, &session, &self.skills)?;
         let (response_text, new_messages) = self.tool_loop(messages).await?;
 
         session.messages.extend(new_messages);

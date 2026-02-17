@@ -12,7 +12,6 @@ impl ContextBuilder {
     pub fn build_messages(
         memory: &MemoryManager,
         session: &Session,
-        user_text: &str,
         skills: &[SkillSummary],
     ) -> Result<Vec<Message>> {
         let mut messages = vec![Message::system(Self::build_system_prompt(memory, skills)?)];
@@ -21,8 +20,8 @@ impl ContextBuilder {
                 "Previous conversation summary:\n{summary}"
             )));
         }
+        // session.messages already contains the current user input (persisted before LLM call)
         messages.extend(session.messages.iter().cloned());
-        messages.push(Message::user(user_text));
         Ok(messages)
     }
 
