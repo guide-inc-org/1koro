@@ -145,6 +145,8 @@ struct ChoiceMessage {
     tool_calls: Option<Vec<ToolCall>>,
 }
 
+const MAX_RETRIES: u32 = 2;
+
 #[async_trait::async_trait]
 impl LlmClient for OpenRouterClient {
     async fn chat(&self, messages: Vec<Message>, tools: Option<&[ToolDef]>) -> Result<LlmResponse> {
@@ -156,35 +158,57 @@ impl LlmClient for OpenRouterClient {
             tools: tools.map(|t| t.to_vec()),
         };
 
-        let response = self
-            .client
-            .post(&url)
-            .bearer_auth(&self.api_key)
-            .json(&request)
-            .send()
-            .await
-            .context("Failed to call LLM API")?;
+        let mut last_err = None;
+        for attempt in 0..=MAX_RETRIES {
+            if attempt > 0 {
+                let delay = Duration::from_secs(1 << (attempt - 1)); // 1s, 2s
+                tracing::warn!("LLM retry {attempt}/{MAX_RETRIES} after {delay:?}");
+                tokio::time::sleep(delay).await;
+            }
 
-        let status = response.status();
-        if !status.is_success() {
-            let body = response.text().await.unwrap_or_default();
-            anyhow::bail!("LLM API error ({}): {}", status, body);
+            let response = match self
+                .client
+                .post(&url)
+                .bearer_auth(&self.api_key)
+                .json(&request)
+                .send()
+                .await
+            {
+                Ok(r) => r,
+                Err(e) => {
+                    last_err = Some(anyhow::anyhow!("Failed to call LLM API: {e}"));
+                    continue;
+                }
+            };
+
+            let status = response.status();
+            if status == reqwest::StatusCode::TOO_MANY_REQUESTS || status.is_server_error() {
+                let body = response.text().await.unwrap_or_default();
+                last_err = Some(anyhow::anyhow!("LLM API error ({}): {}", status, body));
+                continue;
+            }
+            if !status.is_success() {
+                let body = response.text().await.unwrap_or_default();
+                anyhow::bail!("LLM API error ({}): {}", status, body);
+            }
+
+            let body: ChatResponse = response
+                .json()
+                .await
+                .context("Failed to parse LLM response")?;
+            let choice = body
+                .choices
+                .into_iter()
+                .next()
+                .context("No choices in LLM response")?;
+
+            return Ok(LlmResponse {
+                content: choice.message.content,
+                tool_calls: choice.message.tool_calls.unwrap_or_default(),
+            });
         }
 
-        let body: ChatResponse = response
-            .json()
-            .await
-            .context("Failed to parse LLM response")?;
-        let choice = body
-            .choices
-            .into_iter()
-            .next()
-            .context("No choices in LLM response")?;
-
-        Ok(LlmResponse {
-            content: choice.message.content,
-            tool_calls: choice.message.tool_calls.unwrap_or_default(),
-        })
+        Err(last_err.unwrap_or_else(|| anyhow::anyhow!("LLM request failed after retries")))
     }
 }
 

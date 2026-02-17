@@ -6,9 +6,17 @@ use tokio::process::Command;
 
 use super::{Tool, ToolContext, ToolResult};
 
-const SHELL_TIMEOUT: Duration = Duration::from_secs(30);
+pub struct ShellTool {
+    timeout: Duration,
+}
 
-pub struct ShellTool;
+impl ShellTool {
+    pub fn new(timeout_secs: u64) -> Self {
+        Self {
+            timeout: Duration::from_secs(timeout_secs),
+        }
+    }
+}
 
 #[async_trait::async_trait]
 impl Tool for ShellTool {
@@ -16,7 +24,7 @@ impl Tool for ShellTool {
         "shell"
     }
     fn description(&self) -> &str {
-        "Execute a shell command (30s timeout, runs in memory directory)"
+        "Execute a shell command (runs in memory directory)"
     }
     fn parameters(&self) -> Value {
         json!({ "type": "object", "properties": { "command": { "type": "string", "description": "Shell command to execute" } }, "required": ["command"] })
@@ -30,7 +38,7 @@ impl Tool for ShellTool {
             .arg("-c")
             .arg(cmd)
             .current_dir(&ctx.base_dir)
-            .process_group(0) // new process group so we can kill all descendants
+            .process_group(0)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .spawn()
@@ -38,7 +46,7 @@ impl Tool for ShellTool {
 
         let pgid = child.id().unwrap_or(0) as i32;
 
-        let output = match tokio::time::timeout(SHELL_TIMEOUT, child.wait_with_output()).await {
+        let output = match tokio::time::timeout(self.timeout, child.wait_with_output()).await {
             Ok(Ok(output)) => output,
             Ok(Err(e)) => {
                 return Ok(ToolResult {
@@ -46,7 +54,6 @@ impl Tool for ShellTool {
                 });
             }
             Err(_) => {
-                // Kill the entire process group (sh + all children), then reap
                 if pgid > 0 {
                     let kill_ret = unsafe { libc::killpg(pgid, libc::SIGKILL) };
                     if kill_ret != 0 {
@@ -55,7 +62,6 @@ impl Tool for ShellTool {
                             std::io::Error::last_os_error()
                         );
                     }
-                    // Reap zombies; retry briefly if WNOHANG returns 0 (not yet exited)
                     for _ in 0..3 {
                         let ret =
                             unsafe { libc::waitpid(-pgid, std::ptr::null_mut(), libc::WNOHANG) };
@@ -66,7 +72,7 @@ impl Tool for ShellTool {
                     }
                 }
                 return Ok(ToolResult {
-                    for_llm: format!("Shell timeout after {}s", SHELL_TIMEOUT.as_secs()),
+                    for_llm: format!("Shell timeout after {}s", self.timeout.as_secs()),
                 });
             }
         };

@@ -9,7 +9,7 @@ use axum::routing::post;
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 
-use crate::memory::MemoryManager;
+use crate::tools::ToolRegistry;
 
 #[derive(Deserialize)]
 struct JsonRpcRequest {
@@ -57,19 +57,19 @@ impl JsonRpcResponse {
 
 #[derive(Clone)]
 struct McpState {
-    memory: Arc<MemoryManager>,
+    registry: Arc<ToolRegistry>,
     name: String,
     api_key: Option<String>,
 }
 
 pub async fn start(
     bind: &str,
-    memory: Arc<MemoryManager>,
+    registry: Arc<ToolRegistry>,
     name: &str,
     api_key: Option<String>,
 ) -> Result<()> {
     let state = McpState {
-        memory,
+        registry,
         name: name.to_string(),
         api_key,
     };
@@ -124,8 +124,8 @@ async fn handle_rpc(
             "capabilities": { "tools": {} },
             "serverInfo": { "name": state.name, "version": env!("CARGO_PKG_VERSION") }
         })),
-        "tools/list" => Ok(serde_json::json!({ "tools": tools_list() })),
-        "tools/call" => tools_call(&state, &req.params).await,
+        "tools/list" => Ok(serde_json::json!({ "tools": tools_list(&state.registry) })),
+        "tools/call" => tools_call(&state.registry, &req.params).await,
         _ => Err((-32601, format!("Method not found: {}", req.method))),
     };
     let resp = match result {
@@ -135,81 +135,36 @@ async fn handle_rpc(
     (StatusCode::OK, Json(resp))
 }
 
-fn tools_list() -> serde_json::Value {
-    serde_json::json!([
-        { "name": "read_core_memory", "description": "Read identity.md, user.md, or state.md",
-          "inputSchema": { "type": "object", "properties": { "file": { "type": "string", "enum": ["identity.md", "user.md", "state.md"] } }, "required": ["file"] } },
-        { "name": "update_core_memory", "description": "Update user.md or state.md",
-          "inputSchema": { "type": "object", "properties": { "file": { "type": "string", "enum": ["user.md", "state.md"] }, "content": { "type": "string" } }, "required": ["file", "content"] } },
-        { "name": "search_logs", "description": "Search past logs for a keyword",
-          "inputSchema": { "type": "object", "properties": { "query": { "type": "string" } }, "required": ["query"] } },
-        { "name": "read_daily_log", "description": "Read a daily log by date (YYYY-MM-DD)",
-          "inputSchema": { "type": "object", "properties": { "date": { "type": "string" } }, "required": ["date"] } }
-    ])
+/// Generate MCP tool list from ToolRegistry (single source of truth).
+fn tools_list(registry: &ToolRegistry) -> serde_json::Value {
+    let tools: Vec<serde_json::Value> = registry
+        .tool_defs()
+        .iter()
+        .map(|td| {
+            serde_json::json!({
+                "name": td.function.name,
+                "description": td.function.description,
+                "inputSchema": td.function.parameters,
+            })
+        })
+        .collect();
+    serde_json::json!(tools)
 }
 
+/// Execute tool via ToolRegistry (same validation as agent tools).
 async fn tools_call(
-    state: &McpState,
+    registry: &ToolRegistry,
     params: &serde_json::Value,
 ) -> Result<serde_json::Value, (i32, String)> {
     let name = params["name"]
         .as_str()
         .ok_or((-32602, "Missing tool name".into()))?;
     let args = &params["arguments"];
-    let text = match name {
-        "read_core_memory" => {
-            let file = args["file"]
-                .as_str()
-                .ok_or((-32602, "Missing required 'file' parameter".to_string()))?;
-            state
-                .memory
-                .read_core(file)
-                .map_err(|e| (-32000, e.to_string()))?
-        }
-        "update_core_memory" => {
-            let file = args["file"]
-                .as_str()
-                .ok_or((-32602, "Missing required 'file' parameter".to_string()))?;
-            let content = args["content"]
-                .as_str()
-                .ok_or((-32602, "Missing required 'content' parameter".to_string()))?;
-            if content.is_empty() {
-                return Err((-32602, "'content' must not be empty".to_string()));
-            }
-            state
-                .memory
-                .write_core(file, content)
-                .map_err(|e| (-32000, e.to_string()))?;
-            format!("Updated {file}")
-        }
-        "search_logs" => {
-            let query = args["query"]
-                .as_str()
-                .ok_or((-32602, "Missing required 'query' parameter".to_string()))?;
-            if query.is_empty() {
-                return Err((-32602, "'query' must not be empty".to_string()));
-            }
-            let r = state
-                .memory
-                .search_logs(query)
-                .map_err(|e| (-32000, e.to_string()))?;
-            if r.is_empty() {
-                "No results found.".into()
-            } else {
-                r.join("\n")
-            }
-        }
-        "read_daily_log" => {
-            let d = args["date"]
-                .as_str()
-                .ok_or((-32602, "Missing required 'date' parameter".to_string()))?;
-            state
-                .memory
-                .read_daily_log(d)
-                .map_err(|e| (-32000, e.to_string()))?
-                .unwrap_or_else(|| format!("No log for {d}"))
-        }
-        _ => return Err((-32602, format!("Unknown tool: {name}"))),
-    };
-    Ok(serde_json::json!({ "content": [{ "type": "text", "text": text }] }))
+    let args_json =
+        serde_json::to_string(args).map_err(|e| (-32602, format!("Invalid arguments: {e}")))?;
+    let result = registry
+        .execute(name, &args_json)
+        .await
+        .map_err(|e| (-32000, e.to_string()))?;
+    Ok(serde_json::json!({ "content": [{ "type": "text", "text": result.for_llm }] }))
 }

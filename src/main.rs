@@ -73,8 +73,13 @@ async fn run(config_path: &str) -> Result<()> {
     };
     let mut reg = tools::ToolRegistry::new(tool_ctx);
     if cfg.tools.shell_enabled {
-        reg.register(Box::new(tools::shell::ShellTool));
-        tracing::warn!("Shell tool enabled — arbitrary command execution is possible");
+        reg.register(Box::new(tools::shell::ShellTool::new(
+            cfg.tools.shell_timeout,
+        )));
+        tracing::warn!(
+            "Shell tool enabled ({}s timeout) — arbitrary command execution is possible",
+            cfg.tools.shell_timeout
+        );
     }
     reg.register(Box::new(tools::memory::SearchLogsTool));
     reg.register(Box::new(tools::memory::ReadCoreMemoryTool));
@@ -99,9 +104,18 @@ async fn run(config_path: &str) -> Result<()> {
                 cfg.mcp.bind
             );
         }
+        let mcp_ctx = tools::ToolContext {
+            memory: mem.clone(),
+            base_dir: cfg.memory.base_dir.clone(),
+        };
+        let mut mcp_reg = tools::ToolRegistry::new(mcp_ctx);
+        mcp_reg.register(Box::new(tools::memory::SearchLogsTool));
+        mcp_reg.register(Box::new(tools::memory::ReadCoreMemoryTool));
+        mcp_reg.register(Box::new(tools::memory::UpdateCoreMemoryTool));
+        mcp_reg.register(Box::new(tools::memory::ReadDailyLogTool));
         mcp::start(
             &cfg.mcp.bind,
-            mem.clone(),
+            Arc::new(mcp_reg),
             &cfg.agent.name,
             cfg.mcp.api_key.clone(),
         )

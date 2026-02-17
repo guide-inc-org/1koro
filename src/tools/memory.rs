@@ -14,7 +14,10 @@ impl Tool for SearchLogsTool {
         "Search past conversation logs and daily notes for a keyword"
     }
     fn parameters(&self) -> Value {
-        json!({ "type": "object", "properties": { "query": { "type": "string" } }, "required": ["query"] })
+        json!({ "type": "object", "properties": {
+            "query": { "type": "string" },
+            "limit": { "type": "integer", "description": "Max results (default 100)" }
+        }, "required": ["query"] })
     }
     async fn execute(&self, args: Value, ctx: &ToolContext) -> Result<ToolResult> {
         let query = args["query"]
@@ -25,7 +28,8 @@ impl Tool for SearchLogsTool {
                 for_llm: "Error: 'query' must not be empty".into(),
             });
         }
-        let results = ctx.memory.search_logs(query)?;
+        let limit = args["limit"].as_u64().unwrap_or(100) as usize;
+        let results = ctx.memory.search_logs(query, limit)?;
         Ok(ToolResult {
             for_llm: if results.is_empty() {
                 "No results found.".into()

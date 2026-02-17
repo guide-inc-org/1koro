@@ -127,7 +127,7 @@ impl MemoryManager {
             .with_context(|| format!("Failed to append to log: {}", path.display()))
     }
 
-    pub fn search_logs(&self, query: &str) -> Result<Vec<String>> {
+    pub fn search_logs(&self, query: &str, max_results: usize) -> Result<Vec<String>> {
         let logs_dir = self.base_dir.join("logs/daily");
         let mut results = Vec::new();
         if !logs_dir.exists() {
@@ -136,7 +136,8 @@ impl MemoryManager {
         let mut entries: Vec<_> = std::fs::read_dir(&logs_dir)?
             .filter_map(|e| e.ok())
             .collect();
-        entries.sort_by_key(|e| e.file_name());
+        // Sort descending (newest first) so limit cuts old results, not new
+        entries.sort_by_key(|e| std::cmp::Reverse(e.file_name()));
         let query_lower = query.to_lowercase();
         for entry in entries {
             let path = entry.path();
@@ -146,6 +147,9 @@ impl MemoryManager {
                     if line.to_lowercase().contains(&query_lower) {
                         let date = path.file_stem().unwrap_or_default().to_string_lossy();
                         results.push(format!("[{date}] {line}"));
+                        if results.len() >= max_results {
+                            return Ok(results);
+                        }
                     }
                 }
             }

@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -94,10 +93,14 @@ impl SessionStore {
         Ok(())
     }
 
+    /// FNV-1a hash: deterministic across Rust versions (unlike DefaultHasher).
     fn session_filename(key: &str) -> String {
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        key.hash(&mut hasher);
-        format!("{:016x}", hasher.finish())
+        let mut hash: u64 = 0xcbf29ce484222325;
+        for &byte in key.as_bytes() {
+            hash ^= byte as u64;
+            hash = hash.wrapping_mul(0x100000001b3);
+        }
+        format!("{hash:016x}")
     }
 }
 

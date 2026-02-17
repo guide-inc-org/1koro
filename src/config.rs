@@ -77,10 +77,25 @@ fn default_mcp_bind() -> String {
     "127.0.0.1:3001".to_string()
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Deserialize)]
 pub struct ToolsConfig {
     #[serde(default)]
     pub shell_enabled: bool,
+    #[serde(default = "default_shell_timeout")]
+    pub shell_timeout: u64,
+}
+
+fn default_shell_timeout() -> u64 {
+    30
+}
+
+impl Default for ToolsConfig {
+    fn default() -> Self {
+        Self {
+            shell_enabled: false,
+            shell_timeout: default_shell_timeout(),
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -141,7 +156,7 @@ pub async fn init_config_dir() -> Result<()> {
     write_if_missing(base.join("core/state.md"), "# State\n\n(No state yet)\n").await?;
     write_if_missing(
         base.join("config.toml"),
-        "[agent]\nname = \"1koro\"\n\n[llm]\nmodel = \"google/gemini-2.5-flash\"\napi_key = \"YOUR_API_KEY\"\nmax_tokens = 8192\n\n[api]\nbind = \"127.0.0.1:3000\"\n# api_key = \"your-secret-key\"\n\n[mcp]\nenabled = false\nbind = \"127.0.0.1:3001\"\n\n[tools]\nshell_enabled = false\n",
+        "[agent]\nname = \"1koro\"\n\n[llm]\nmodel = \"minimax/MiniMax-M1-80k\"\napi_key = \"YOUR_API_KEY\"\nmax_tokens = 8192\n\n[api]\nbind = \"127.0.0.1:3000\"\n# api_key = \"your-secret-key\"\n\n[mcp]\nenabled = false\nbind = \"127.0.0.1:3001\"\n\n[tools]\nshell_enabled = false\n# shell_timeout = 30\n",
     )
     .await?;
     Ok(())
