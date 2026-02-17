@@ -48,12 +48,21 @@ impl Tool for ShellTool {
             Err(_) => {
                 // Kill the entire process group (sh + all children), then reap
                 if pgid > 0 {
-                    unsafe {
-                        libc::killpg(pgid, libc::SIGKILL);
+                    let kill_ret = unsafe { libc::killpg(pgid, libc::SIGKILL) };
+                    if kill_ret != 0 {
+                        tracing::warn!(
+                            "killpg({pgid}) failed: {}",
+                            std::io::Error::last_os_error()
+                        );
                     }
-                    // waitpid to reap zombie; WNOHANG avoids blocking if already reaped
-                    unsafe {
-                        libc::waitpid(-pgid, std::ptr::null_mut(), libc::WNOHANG);
+                    // Reap zombies; retry briefly if WNOHANG returns 0 (not yet exited)
+                    for _ in 0..3 {
+                        let ret =
+                            unsafe { libc::waitpid(-pgid, std::ptr::null_mut(), libc::WNOHANG) };
+                        if ret != 0 {
+                            break;
+                        }
+                        std::thread::sleep(Duration::from_millis(10));
                     }
                 }
                 return Ok(ToolResult {

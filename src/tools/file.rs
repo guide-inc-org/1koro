@@ -14,7 +14,7 @@ impl Tool for ReadFileTool {
         "Read file contents within the memory directory (~/.1koro)"
     }
     fn parameters(&self) -> Value {
-        json!({ "type": "object", "properties": { "path": { "type": "string", "description": "File path relative to workspace" } }, "required": ["path"] })
+        json!({ "type": "object", "properties": { "path": { "type": "string", "description": "File path relative to memory directory (~/.1koro)" } }, "required": ["path"] })
     }
     async fn execute(&self, args: Value, ctx: &ToolContext) -> Result<ToolResult> {
         let path_str = args["path"]
@@ -44,7 +44,7 @@ impl Tool for ReadFileTool {
         };
         if !canonical.starts_with(&base_canonical) {
             return Ok(ToolResult {
-                for_llm: format!("Error: path outside workspace: {}", path.display()),
+                for_llm: format!("Error: path outside memory directory: {}", path.display()),
             });
         }
 

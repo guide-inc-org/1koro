@@ -148,7 +148,17 @@ fn is_localhost(bind: &str) -> bool {
     } else {
         bind
     };
-    host == "localhost" || host == "127.0.0.1" || host == "[::1]" || host.starts_with("127.")
+    host == "localhost" || host == "127.0.0.1" || host == "[::1]" || is_loopback_ip(host)
+}
+
+/// Check if host is a 127.x.y.z loopback IP (not a hostname like 127.evil.com).
+fn is_loopback_ip(host: &str) -> bool {
+    if let Some(rest) = host.strip_prefix("127.") {
+        // Must be digits and dots only (e.g. "0.0.1", "0.1.1")
+        !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_digit() || b == b'.')
+    } else {
+        false
+    }
 }
 
 #[cfg(test)]
@@ -170,5 +180,20 @@ mod tests {
         assert!(!is_localhost("example.com:3000"));
         // "localhost" prefix in a different hostname must not match
         assert!(!is_localhost("localhost.evil.com:3000"));
+        // "127." prefix in a hostname must not match
+        assert!(!is_localhost("127.evil.com:3000"));
+        assert!(!is_localhost("127.0.0.evil:3000"));
+    }
+
+    #[test]
+    fn test_is_loopback_ip() {
+        assert!(is_loopback_ip("127.0.0.1"));
+        assert!(is_loopback_ip("127.0.1.1"));
+        assert!(is_loopback_ip("127.255.255.255"));
+        assert!(!is_loopback_ip("127.evil.com"));
+        assert!(!is_loopback_ip("127.0.0.evil"));
+        assert!(!is_loopback_ip("127."));
+        assert!(!is_loopback_ip("128.0.0.1"));
+        assert!(!is_loopback_ip("localhost"));
     }
 }
