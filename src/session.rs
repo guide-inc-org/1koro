@@ -83,11 +83,14 @@ impl SessionStore {
 
         let filename = Self::session_filename(key);
         let path = dir.join(format!("{filename}.json"));
-        let tmp = dir.join(format!("{filename}.json.tmp"));
+        let tmp = dir.join(format!("{filename}.{}.json.tmp", std::process::id()));
 
         let json = serde_json::to_string_pretty(session)?;
         std::fs::write(&tmp, &json)?;
-        std::fs::rename(&tmp, &path)?;
+        if let Err(e) = std::fs::rename(&tmp, &path) {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(e.into());
+        }
         Ok(())
     }
 

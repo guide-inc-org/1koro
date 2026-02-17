@@ -93,6 +93,12 @@ async fn run(config_path: &str) -> Result<()> {
     let agent = agent::Agent::new(llm, mem.clone(), sessions, reg, skills);
 
     if cfg.mcp.enabled {
+        if cfg.mcp.api_key.is_none() && !is_localhost(&cfg.mcp.bind) {
+            anyhow::bail!(
+                "MCP authentication required for non-localhost binding '{}'. Set [mcp] api_key.",
+                cfg.mcp.bind
+            );
+        }
         mcp::start(
             &cfg.mcp.bind,
             mem.clone(),
@@ -101,12 +107,19 @@ async fn run(config_path: &str) -> Result<()> {
         )
         .await?;
         if cfg.mcp.api_key.is_none() {
-            tracing::warn!("MCP authentication disabled — set [mcp] api_key to enable");
+            tracing::warn!("MCP authentication disabled (localhost-only)");
         }
     }
 
     if cfg.api.api_key.is_none() {
-        tracing::warn!("API authentication disabled — set [api] api_key to enable");
+        if is_localhost(&cfg.api.bind) {
+            tracing::warn!("API authentication disabled (localhost-only)");
+        } else {
+            anyhow::bail!(
+                "API authentication required for non-localhost binding '{}'. Set [api] api_key.",
+                cfg.api.bind
+            );
+        }
     }
 
     let state = api::AppState {
@@ -123,4 +136,8 @@ async fn run(config_path: &str) -> Result<()> {
         })
         .await?;
     Ok(())
+}
+
+fn is_localhost(bind: &str) -> bool {
+    bind.starts_with("127.") || bind.starts_with("localhost") || bind.starts_with("[::1]")
 }
