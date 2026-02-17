@@ -7,13 +7,11 @@ pub struct Config {
     pub agent: AgentConfig,
     pub llm: LlmConfig,
     #[serde(default)]
-    pub channels: ChannelsConfig,
+    pub api: ApiConfig,
     #[serde(default)]
     pub mcp: McpConfig,
     #[serde(default)]
     pub memory: MemoryConfig,
-    #[serde(default)]
-    pub cron: CronConfig,
 }
 
 #[derive(Debug, Deserialize)]
@@ -24,7 +22,6 @@ pub struct AgentConfig {
 #[derive(Debug, Deserialize)]
 pub struct LlmConfig {
     pub provider: String,
-    /// Base URL for the API. Optional — each provider has a sensible default.
     pub base_url: Option<String>,
     pub model: String,
     pub api_key: String,
@@ -36,24 +33,22 @@ fn default_max_tokens() -> u32 {
     8192
 }
 
-#[derive(Debug, Default, Deserialize)]
-pub struct ChannelsConfig {
-    pub slack: Option<SlackConfig>,
-    pub discord: Option<DiscordConfig>,
+#[derive(Debug, Deserialize)]
+pub struct ApiConfig {
+    #[serde(default = "default_api_bind")]
+    pub bind: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-pub struct SlackConfig {
-    pub enabled: bool,
-    pub bot_token: String,
-    pub app_token: String,
+impl Default for ApiConfig {
+    fn default() -> Self {
+        Self {
+            bind: default_api_bind(),
+        }
+    }
 }
 
-#[derive(Debug, Clone, Deserialize)]
-pub struct DiscordConfig {
-    pub enabled: bool,
-    pub token: String,
-    pub guild_id: Option<String>,
+fn default_api_bind() -> String {
+    "127.0.0.1:3000".to_string()
 }
 
 #[derive(Debug, Deserialize)]
@@ -74,7 +69,7 @@ impl Default for McpConfig {
 }
 
 fn default_mcp_bind() -> String {
-    "127.0.0.1:3000".to_string()
+    "127.0.0.1:3001".to_string()
 }
 
 #[derive(Debug, Deserialize)]
@@ -102,31 +97,6 @@ fn default_base_dir() -> PathBuf {
 
 fn default_core_memory_max_tokens() -> u32 {
     2000
-}
-
-#[derive(Debug, Deserialize)]
-pub struct CronConfig {
-    #[serde(default = "default_daily_cron")]
-    pub daily_summary: String,
-    #[serde(default = "default_weekly_cron")]
-    pub weekly_summary: String,
-}
-
-impl Default for CronConfig {
-    fn default() -> Self {
-        Self {
-            daily_summary: default_daily_cron(),
-            weekly_summary: default_weekly_cron(),
-        }
-    }
-}
-
-fn default_daily_cron() -> String {
-    "0 3 * * *".to_string()
-}
-
-fn default_weekly_cron() -> String {
-    "0 4 * * 1".to_string()
 }
 
 pub fn load(path: &str) -> Result<Config> {
@@ -179,44 +149,20 @@ pub async fn init_config_dir() -> Result<()> {
 name = "1koro"
 
 [llm]
-provider = "minimax"
-# base_url = "https://api.minimaxi.chat/v1"  # optional, uses provider default
-model = "MiniMax-M1"
+provider = "openrouter"
+model = "google/gemini-2.5-flash"
 api_key = "YOUR_API_KEY"
 max_tokens = 8192
 
-# Other provider examples:
-# provider = "openai"
-# model = "gpt-4o"
-#
-# provider = "openrouter"
-# model = "anthropic/claude-sonnet-4"
-#
-# provider = "anthropic"
-# model = "claude-sonnet-4-5-20250929"
-#
-# provider = "google"
-# model = "gemini-2.5-pro"
-
-# [channels.slack]
-# enabled = true
-# bot_token = "xoxb-YOUR_BOT_TOKEN"
-# app_token = "xapp-YOUR_APP_TOKEN"
-
-# [channels.discord]
-# enabled = true
-# token = "YOUR_BOT_TOKEN"
+[api]
+bind = "127.0.0.1:3000"
 
 [mcp]
 enabled = false
-bind = "127.0.0.1:3000"
+bind = "127.0.0.1:3001"
 
 [memory]
 core_memory_max_tokens = 2000
-
-[cron]
-daily_summary = "0 3 * * *"
-weekly_summary = "0 4 * * 1"
 "#,
         )
         .await?;

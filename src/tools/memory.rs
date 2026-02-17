@@ -114,6 +114,105 @@ impl Tool for UpdateCoreMemoryTool {
     }
 }
 
+pub struct ReadDailyLogTool;
+
+#[async_trait::async_trait]
+impl Tool for ReadDailyLogTool {
+    fn name(&self) -> &str {
+        "read_daily_log"
+    }
+    fn description(&self) -> &str {
+        "Read a daily log by date. Use this to review what happened on a specific day."
+    }
+    fn parameters(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "date": {
+                    "type": "string",
+                    "description": "Date in YYYY-MM-DD format"
+                }
+            },
+            "required": ["date"]
+        })
+    }
+    async fn execute(&self, args: Value, ctx: &ToolContext) -> Result<ToolResult> {
+        let date = args["date"].as_str().unwrap_or("");
+        match ctx.memory.read_daily_log(date)? {
+            Some(content) => Ok(ToolResult {
+                for_llm: content,
+                for_user: None,
+            }),
+            None => Ok(ToolResult {
+                for_llm: format!("No log found for {date}"),
+                for_user: None,
+            }),
+        }
+    }
+}
+
+pub struct WriteSummaryTool;
+
+#[async_trait::async_trait]
+impl Tool for WriteSummaryTool {
+    fn name(&self) -> &str {
+        "write_summary"
+    }
+    fn description(&self) -> &str {
+        "Write a weekly or monthly summary. Use period='weekly' with id like '2026-W08', \
+         or period='monthly' with id like '2026-02'."
+    }
+    fn parameters(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "period": {
+                    "type": "string",
+                    "description": "Summary period: 'weekly' or 'monthly'",
+                    "enum": ["weekly", "monthly"]
+                },
+                "id": {
+                    "type": "string",
+                    "description": "Period identifier (e.g. '2026-W08' for weekly, '2026-02' for monthly)"
+                },
+                "content": {
+                    "type": "string",
+                    "description": "Summary content in markdown"
+                }
+            },
+            "required": ["period", "id", "content"]
+        })
+    }
+    async fn execute(&self, args: Value, ctx: &ToolContext) -> Result<ToolResult> {
+        let period = args["period"].as_str().unwrap_or("weekly");
+        let id = args["id"].as_str().unwrap_or("");
+        let content = args["content"].as_str().unwrap_or("");
+
+        if id.is_empty() || content.is_empty() {
+            return Ok(ToolResult {
+                for_llm: "Error: id and content are required".to_string(),
+                for_user: None,
+            });
+        }
+
+        match period {
+            "weekly" => ctx.memory.write_weekly_summary(id, content)?,
+            "monthly" => ctx.memory.write_monthly_summary(id, content)?,
+            _ => {
+                return Ok(ToolResult {
+                    for_llm: format!("Error: unknown period '{period}', use 'weekly' or 'monthly'"),
+                    for_user: None,
+                });
+            }
+        }
+
+        Ok(ToolResult {
+            for_llm: format!("Written {period} summary: {id}"),
+            for_user: None,
+        })
+    }
+}
+
 pub struct AppendLogTool;
 
 #[async_trait::async_trait]

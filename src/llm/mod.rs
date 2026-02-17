@@ -1,5 +1,6 @@
-pub mod anthropic;
 pub mod openai_compatible;
+
+use std::sync::Arc;
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -72,7 +73,7 @@ impl Message {
     }
 }
 
-// --- Tool definitions (sent to LLM in request) ---
+// --- Tool definitions ---
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ToolDef {
@@ -88,7 +89,7 @@ pub struct FunctionDef {
     pub parameters: serde_json::Value,
 }
 
-// --- Tool calls (from LLM response) ---
+// --- Tool calls ---
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolCall {
@@ -111,7 +112,7 @@ pub struct LlmResponse {
     pub tool_calls: Vec<ToolCall>,
 }
 
-// --- LLM Client trait ---
+// --- LLM Client trait (keep for future Bedrock support) ---
 
 #[async_trait::async_trait]
 pub trait LlmClient: Send + Sync {
@@ -124,30 +125,24 @@ pub trait LlmClient: Send + Sync {
 
 // --- Factory ---
 
-pub fn create_client(config: &LlmConfig) -> Result<Box<dyn LlmClient>> {
-    match config.provider.as_str() {
-        "anthropic" => Ok(Box::new(anthropic::AnthropicClient::new(config)?)),
-        provider => {
-            let base_url = config
-                .base_url
-                .clone()
-                .unwrap_or_else(|| default_base_url(provider).to_string());
-            Ok(Box::new(openai_compatible::OpenAICompatibleClient::new(
-                config, &base_url,
-            )?))
-        }
-    }
+pub fn create_client(config: &LlmConfig) -> Result<Arc<dyn LlmClient>> {
+    let base_url = config
+        .base_url
+        .clone()
+        .unwrap_or_else(|| default_base_url(&config.provider).to_string());
+    Ok(Arc::new(openai_compatible::OpenAICompatibleClient::new(
+        config, &base_url,
+    )?))
 }
 
 fn default_base_url(provider: &str) -> &str {
     match provider {
         "openai" => "https://api.openai.com/v1",
-        "minimax" => "https://api.minimaxi.chat/v1",
         "openrouter" => "https://openrouter.ai/api/v1",
         "google" => "https://generativelanguage.googleapis.com/v1beta/openai",
         "groq" => "https://api.groq.com/openai/v1",
         "together" => "https://api.together.xyz/v1",
         "deepseek" => "https://api.deepseek.com/v1",
-        _ => "https://api.openai.com/v1",
+        _ => "https://openrouter.ai/api/v1",
     }
 }

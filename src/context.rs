@@ -1,4 +1,5 @@
 use anyhow::Result;
+use chrono::{Datelike, Local};
 
 use crate::llm::Message;
 use crate::memory::MemoryManager;
@@ -16,7 +17,7 @@ impl ContextBuilder {
     ) -> Result<Vec<Message>> {
         let mut messages = Vec::new();
 
-        // System prompt: core memory + skills
+        // System prompt
         let system = Self::build_system_prompt(memory, skills)?;
         messages.push(Message::system(system));
 
@@ -42,7 +43,7 @@ impl ContextBuilder {
     ) -> Result<String> {
         let mut prompt = String::new();
 
-        // Core memory
+        // Core memory (always included)
         let identity = memory.read_core("identity.md").unwrap_or_default();
         let user = memory.read_core("user.md").unwrap_or_default();
         let state = memory.read_core("state.md").unwrap_or_default();
@@ -53,12 +54,27 @@ impl ContextBuilder {
         prompt.push_str("\n\n---\n\n");
         prompt.push_str(&state);
 
+        // Current monthly summary (if exists)
+        let now = Local::now();
+        let month_id = now.format("%Y-%m").to_string();
+        if let Ok(Some(monthly)) = memory.read_monthly_summary(&month_id) {
+            prompt.push_str("\n\n---\n\n# This Month's Summary\n\n");
+            prompt.push_str(&monthly);
+        }
+
+        // Current weekly summary (if exists)
+        let week_id = format!("{}-W{:02}", now.year(), now.iso_week().week());
+        if let Ok(Some(weekly)) = memory.read_weekly_summary(&week_id) {
+            prompt.push_str("\n\n---\n\n# This Week's Summary\n\n");
+            prompt.push_str(&weekly);
+        }
+
         // Tools usage hint
         prompt.push_str("\n\n---\n\n");
         prompt.push_str("You have access to tools. Use them when needed to answer questions, ");
         prompt.push_str("search memory, execute commands, or read files.\n");
 
-        // Skill summaries (lazy loading pattern from PicoClaw)
+        // Skill summaries
         if !skills.is_empty() {
             prompt.push_str("\n# Available Skills\n\n");
             for skill in skills {
