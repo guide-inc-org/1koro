@@ -80,7 +80,15 @@ async fn handle_rpc(State(state): State<McpState>, Json(req): Json<Value>) -> im
         );
     }
 
-    let method = req["method"].as_str().unwrap_or("");
+    let method = match req["method"].as_str() {
+        Some(m) => m,
+        None => {
+            return (
+                StatusCode::OK,
+                Json(rpc_err(id, -32600, "Missing or invalid 'method' field")),
+            );
+        }
+    };
     let params = &req["params"];
 
     let result = match method {

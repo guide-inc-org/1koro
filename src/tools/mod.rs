@@ -8,6 +8,7 @@ use serde_json::{Value, json};
 
 use crate::memory::MemoryManager;
 
+#[derive(Debug)]
 pub struct ToolResult {
     pub for_llm: String,
 }
@@ -220,6 +221,8 @@ impl ToolRegistry {
     }
 
     pub fn add(&mut self, kind: ToolKind) {
+        let name = kind.name();
+        self.tools.retain(|t| t.name() != name);
         self.tools.push(kind);
     }
 
@@ -259,5 +262,85 @@ impl ToolRegistry {
         let args: Value = serde_json::from_str(args_json)
             .map_err(|e| anyhow::anyhow!("Invalid tool arguments for {name}: {e}"))?;
         tool.execute(args, &self.ctx).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_tool_kind_names_are_unique() {
+        let all = [
+            ToolKind::SearchLogs,
+            ToolKind::ReadCoreMemory,
+            ToolKind::UpdateCoreMemory,
+            ToolKind::ReadDailyLog,
+            ToolKind::WriteSummary,
+            ToolKind::AppendLog,
+            ToolKind::ReadFile,
+            ToolKind::Shell(std::time::Duration::from_secs(30)),
+        ];
+        let mut names: Vec<&str> = all.iter().map(|t| t.name()).collect();
+        let len_before = names.len();
+        names.sort();
+        names.dedup();
+        assert_eq!(names.len(), len_before, "ToolKind names must be unique");
+    }
+
+    #[test]
+    fn test_tool_kind_spec_consistency() {
+        // spec().0 must match name() for all variants
+        let all = [
+            ToolKind::SearchLogs,
+            ToolKind::ReadCoreMemory,
+            ToolKind::UpdateCoreMemory,
+            ToolKind::ReadDailyLog,
+            ToolKind::WriteSummary,
+            ToolKind::AppendLog,
+            ToolKind::ReadFile,
+            ToolKind::Shell(std::time::Duration::from_secs(30)),
+        ];
+        for t in &all {
+            assert_eq!(t.name(), t.spec().0, "name() and spec().0 must match");
+        }
+    }
+
+    #[test]
+    fn test_registry_dedup_on_add() {
+        let ctx = ToolContext {
+            memory: Arc::new(
+                crate::memory::MemoryManager::new(&crate::config::MemoryConfig::default()).unwrap(),
+            ),
+            base_dir: std::env::temp_dir(),
+        };
+        let mut reg = ToolRegistry::new(ctx);
+        reg.add(ToolKind::SearchLogs);
+        reg.add(ToolKind::SearchLogs); // duplicate
+        assert_eq!(
+            reg.tools
+                .iter()
+                .filter(|t| t.name() == "search_logs")
+                .count(),
+            1,
+            "duplicate add must not create two entries"
+        );
+    }
+
+    #[test]
+    fn test_registry_unknown_tool() {
+        let ctx = ToolContext {
+            memory: Arc::new(
+                crate::memory::MemoryManager::new(&crate::config::MemoryConfig::default()).unwrap(),
+            ),
+            base_dir: std::env::temp_dir(),
+        };
+        let reg = ToolRegistry::new(ctx);
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        let result = rt.block_on(reg.execute("nonexistent", "{}"));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Unknown tool"));
     }
 }
