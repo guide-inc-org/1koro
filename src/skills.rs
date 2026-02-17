@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 
@@ -13,7 +13,7 @@ pub struct SkillLoader {
 }
 
 impl SkillLoader {
-    pub fn new(base_dir: &PathBuf) -> Self {
+    pub fn new(base_dir: &Path) -> Self {
         Self {
             skills_dir: base_dir.join("skills"),
         }

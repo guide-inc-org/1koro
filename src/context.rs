@@ -17,7 +17,9 @@ impl ContextBuilder {
     ) -> Result<Vec<Message>> {
         let mut messages = vec![Message::system(Self::build_system_prompt(memory, skills)?)];
         if let Some(summary) = &session.summary {
-            messages.push(Message::system(format!("Previous conversation summary:\n{summary}")));
+            messages.push(Message::system(format!(
+                "Previous conversation summary:\n{summary}"
+            )));
         }
         messages.extend(session.messages.iter().cloned());
         messages.push(Message::user(user_text));
@@ -53,7 +55,12 @@ impl ContextBuilder {
         if !skills.is_empty() {
             p.push_str("\n# Available Skills\n\n");
             for s in skills {
-                p.push_str(&format!("- **{}**: {} (use `read_file` to load: {})\n", s.name, s.description, s.path.display()));
+                p.push_str(&format!(
+                    "- **{}**: {} (use `read_file` to load: {})\n",
+                    s.name,
+                    s.description,
+                    s.path.display()
+                ));
             }
         }
 

@@ -22,19 +22,44 @@ pub struct Message {
 
 impl Message {
     pub fn system(content: impl Into<String>) -> Self {
-        Self { role: "system".into(), content: Some(content.into()), tool_calls: None, tool_call_id: None }
+        Self {
+            role: "system".into(),
+            content: Some(content.into()),
+            tool_calls: None,
+            tool_call_id: None,
+        }
     }
     pub fn user(content: impl Into<String>) -> Self {
-        Self { role: "user".into(), content: Some(content.into()), tool_calls: None, tool_call_id: None }
+        Self {
+            role: "user".into(),
+            content: Some(content.into()),
+            tool_calls: None,
+            tool_call_id: None,
+        }
     }
     pub fn assistant(content: impl Into<String>) -> Self {
-        Self { role: "assistant".into(), content: Some(content.into()), tool_calls: None, tool_call_id: None }
+        Self {
+            role: "assistant".into(),
+            content: Some(content.into()),
+            tool_calls: None,
+            tool_call_id: None,
+        }
     }
     pub fn assistant_with_tool_calls(content: Option<String>, tool_calls: Vec<ToolCall>) -> Self {
-        Self { role: "assistant".into(), content, tool_calls: Some(tool_calls), tool_call_id: None }
+        Self {
+            role: "assistant".into(),
+            content,
+            tool_calls: Some(tool_calls),
+            tool_call_id: None,
+        }
     }
     pub fn tool_result(id: impl Into<String>, content: impl Into<String>) -> Self {
-        Self { role: "tool".into(), content: Some(content.into()), tool_calls: None, tool_call_id: Some(id.into()) }
+        Self {
+            role: "tool".into(),
+            content: Some(content.into()),
+            tool_calls: None,
+            tool_call_id: Some(id.into()),
+        }
     }
 }
 
@@ -131,7 +156,8 @@ impl LlmClient for OpenRouterClient {
             tools: tools.map(|t| t.to_vec()),
         };
 
-        let response = self.client
+        let response = self
+            .client
             .post(&url)
             .bearer_auth(&self.api_key)
             .json(&request)
@@ -145,8 +171,15 @@ impl LlmClient for OpenRouterClient {
             anyhow::bail!("LLM API error ({}): {}", status, body);
         }
 
-        let body: ChatResponse = response.json().await.context("Failed to parse LLM response")?;
-        let choice = body.choices.into_iter().next().context("No choices in LLM response")?;
+        let body: ChatResponse = response
+            .json()
+            .await
+            .context("Failed to parse LLM response")?;
+        let choice = body
+            .choices
+            .into_iter()
+            .next()
+            .context("No choices in LLM response")?;
 
         Ok(LlmResponse {
             content: choice.message.content,
@@ -158,7 +191,9 @@ impl LlmClient for OpenRouterClient {
 // --- Factory ---
 
 pub fn create_client(config: &LlmConfig) -> Result<Arc<dyn LlmClient>> {
-    let base_url = config.base_url.clone()
+    let base_url = config
+        .base_url
+        .clone()
         .unwrap_or_else(|| "https://openrouter.ai/api/v1".to_string());
 
     Ok(Arc::new(OpenRouterClient {

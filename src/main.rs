@@ -16,7 +16,11 @@ use clap::{Parser, Subcommand};
 use tokio::signal;
 
 #[derive(Parser)]
-#[command(name = "1koro", version, about = "Personal AI agent that never forgets")]
+#[command(
+    name = "1koro",
+    version,
+    about = "Personal AI agent that never forgets"
+)]
 struct Cli {
     #[arg(short, long, default_value = "~/.1koro/config.toml")]
     config: String,
@@ -49,7 +53,10 @@ async fn main() -> Result<()> {
         Commands::Run => run(&cli.config).await?,
         Commands::Status => {
             let cfg = config::load(&cli.config)?;
-            println!("{}", memory::MemoryManager::new(&cfg.memory)?.read_core("state.md")?);
+            println!(
+                "{}",
+                memory::MemoryManager::new(&cfg.memory)?.read_core("state.md")?
+            );
         }
     }
     Ok(())
@@ -60,7 +67,10 @@ async fn run(config_path: &str) -> Result<()> {
     let mem = Arc::new(memory::MemoryManager::new(&cfg.memory)?);
     let llm = llm::create_client(&cfg.llm)?;
 
-    let tool_ctx = tools::ToolContext { memory: mem.clone(), base_dir: cfg.memory.base_dir.clone() };
+    let tool_ctx = tools::ToolContext {
+        memory: mem.clone(),
+        base_dir: cfg.memory.base_dir.clone(),
+    };
     let mut reg = tools::ToolRegistry::new(tool_ctx);
     if cfg.tools.shell_enabled {
         reg.register(Box::new(tools::shell::ShellTool));
@@ -75,13 +85,28 @@ async fn run(config_path: &str) -> Result<()> {
     reg.register(Box::new(tools::file::ReadFileTool));
 
     let skills = skills::SkillLoader::new(&cfg.memory.base_dir).load_summaries()?;
-    if !skills.is_empty() { tracing::info!("Loaded {} skills", skills.len()); }
+    if !skills.is_empty() {
+        tracing::info!("Loaded {} skills", skills.len());
+    }
 
     let sessions = session::SessionStore::new(cfg.memory.base_dir.clone())?;
     let agent = agent::Agent::new(llm, mem.clone(), sessions, reg, skills);
 
     if cfg.mcp.enabled {
-        mcp::start(&cfg.mcp.bind, mem.clone(), &cfg.agent.name, cfg.mcp.api_key.clone()).await?;
+        mcp::start(
+            &cfg.mcp.bind,
+            mem.clone(),
+            &cfg.agent.name,
+            cfg.mcp.api_key.clone(),
+        )
+        .await?;
+        if cfg.mcp.api_key.is_none() {
+            tracing::warn!("MCP authentication disabled — set [mcp] api_key to enable");
+        }
+    }
+
+    if cfg.api.api_key.is_none() {
+        tracing::warn!("API authentication disabled — set [api] api_key to enable");
     }
 
     let state = api::AppState {
@@ -93,7 +118,9 @@ async fn run(config_path: &str) -> Result<()> {
     tracing::info!("{} listening on {}", cfg.agent.name, cfg.api.bind);
 
     axum::serve(listener, api::router(state))
-        .with_graceful_shutdown(async { signal::ctrl_c().await.ok(); })
+        .with_graceful_shutdown(async {
+            signal::ctrl_c().await.ok();
+        })
         .await?;
     Ok(())
 }

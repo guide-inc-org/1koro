@@ -188,7 +188,7 @@ For Claude Desktop / Claude mobile app. Exposes memory as tools:
 | Async runtime | tokio |
 | HTTP server | axum |
 | HTTP client | reqwest |
-| MCP server | rmcp |
+| MCP server | custom JSON-RPC (axum) |
 | LLM provider | OpenRouter (MiniMax M2.5 default) |
 | Config | TOML |
 | Wiring | n8n (external, self-hosted) |

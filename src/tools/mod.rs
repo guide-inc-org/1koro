@@ -36,7 +36,10 @@ pub struct ToolRegistry {
 
 impl ToolRegistry {
     pub fn new(ctx: ToolContext) -> Self {
-        Self { tools: HashMap::new(), ctx }
+        Self {
+            tools: HashMap::new(),
+            ctx,
+        }
     }
 
     pub fn register(&mut self, tool: Box<dyn Tool>) {
@@ -44,20 +47,27 @@ impl ToolRegistry {
     }
 
     pub fn tool_defs(&self) -> Vec<ToolDef> {
-        let mut defs: Vec<_> = self.tools.values().map(|t| ToolDef {
-            type_: "function".into(),
-            function: FunctionDef {
-                name: t.name().into(),
-                description: t.description().into(),
-                parameters: t.parameters(),
-            },
-        }).collect();
+        let mut defs: Vec<_> = self
+            .tools
+            .values()
+            .map(|t| ToolDef {
+                type_: "function".into(),
+                function: FunctionDef {
+                    name: t.name().into(),
+                    description: t.description().into(),
+                    parameters: t.parameters(),
+                },
+            })
+            .collect();
         defs.sort_by(|a, b| a.function.name.cmp(&b.function.name));
         defs
     }
 
     pub async fn execute(&self, name: &str, args_json: &str) -> Result<ToolResult> {
-        let tool = self.tools.get(name).ok_or_else(|| anyhow::anyhow!("Unknown tool: {name}"))?;
+        let tool = self
+            .tools
+            .get(name)
+            .ok_or_else(|| anyhow::anyhow!("Unknown tool: {name}"))?;
         let args: Value = serde_json::from_str(args_json)
             .map_err(|e| anyhow::anyhow!("Invalid tool arguments for {name}: {e}"))?;
         tool.execute(args, &self.ctx).await

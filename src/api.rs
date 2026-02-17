@@ -26,8 +26,12 @@ pub struct MessageRequest {
     pub user: String,
 }
 
-fn default_channel() -> String { "cli".into() }
-fn default_user() -> String { "masaki".into() }
+fn default_channel() -> String {
+    "cli".into()
+}
+fn default_user() -> String {
+    "masaki".into()
+}
 
 #[derive(Serialize)]
 pub struct MessageResponse {
@@ -45,33 +49,51 @@ pub fn router(state: AppState) -> Router {
 }
 
 async fn auth_layer(State(state): State<AppState>, req: Request, next: Next) -> impl IntoResponse {
-    if let Some(ref expected) = state.api_key {
-        if req.uri().path() != "/health" {
-            let auth_ok = req.headers()
-                .get("authorization")
-                .and_then(|v| v.to_str().ok())
-                .and_then(|v| v.strip_prefix("Bearer "))
-                .is_some_and(|t| t == expected);
-            if !auth_ok {
-                return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error": "Unauthorized"}))).into_response();
-            }
+    if let Some(ref expected) = state.api_key
+        && req.uri().path() != "/health"
+    {
+        let auth_ok = req
+            .headers()
+            .get("authorization")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.strip_prefix("Bearer "))
+            .is_some_and(|t| t == expected);
+        if !auth_ok {
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(serde_json::json!({"error": "Unauthorized"})),
+            )
+                .into_response();
         }
     }
     next.run(req).await.into_response()
 }
 
-async fn handle_message(State(state): State<AppState>, Json(req): Json<MessageRequest>) -> impl IntoResponse {
-    match state.agent.handle_message(&req.text, &req.channel, &req.user).await {
-        Ok(resp) => (StatusCode::OK, Json(MessageResponse {
-            text: resp.text.unwrap_or_else(|| "(no response)".into()),
-            actions: resp.actions,
-        })),
+async fn handle_message(
+    State(state): State<AppState>,
+    Json(req): Json<MessageRequest>,
+) -> impl IntoResponse {
+    match state
+        .agent
+        .handle_message(&req.text, &req.channel, &req.user)
+        .await
+    {
+        Ok(resp) => (
+            StatusCode::OK,
+            Json(MessageResponse {
+                text: resp.text.unwrap_or_else(|| "(no response)".into()),
+                actions: resp.actions,
+            }),
+        ),
         Err(e) => {
             tracing::error!("Agent error: {e}");
-            (StatusCode::INTERNAL_SERVER_ERROR, Json(MessageResponse {
-                text: format!("Error: {e}"),
-                actions: vec![],
-            }))
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(MessageResponse {
+                    text: format!("Error: {e}"),
+                    actions: vec![],
+                }),
+            )
         }
     }
 }

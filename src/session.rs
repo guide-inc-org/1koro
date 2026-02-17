@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
 use chrono::{DateTime, Local};
@@ -18,9 +18,11 @@ pub struct Session {
     pub updated_at: DateTime<Local>,
 }
 
+/// Per-session locking: concurrent requests for different sessions run in parallel,
+/// same-session requests are serialized to prevent message loss.
 pub struct SessionStore {
     base_dir: PathBuf,
-    sessions: Mutex<HashMap<String, Session>>,
+    sessions: Mutex<HashMap<String, Arc<tokio::sync::Mutex<Session>>>>,
 }
 
 impl SessionStore {
@@ -28,15 +30,16 @@ impl SessionStore {
         let sessions_dir = base_dir.join("sessions");
         std::fs::create_dir_all(&sessions_dir)?;
 
-        let mut sessions = HashMap::new();
+        let mut loaded: HashMap<String, Session> = HashMap::new();
         for entry in std::fs::read_dir(&sessions_dir)?.flatten() {
             let path = entry.path();
             if path.extension().is_some_and(|e| e == "json") {
                 let content = std::fs::read_to_string(&path)?;
                 if let Ok(session) = serde_json::from_str::<Session>(&content) {
                     let key = session.key.clone();
-                    sessions.entry(key)
-                        .and_modify(|existing: &mut Session| {
+                    loaded
+                        .entry(key)
+                        .and_modify(|existing| {
                             if session.updated_at > existing.updated_at {
                                 *existing = session.clone();
                             }
@@ -46,29 +49,35 @@ impl SessionStore {
             }
         }
 
-        Ok(Self { base_dir, sessions: Mutex::new(sessions) })
+        let sessions: HashMap<String, Arc<tokio::sync::Mutex<Session>>> = loaded
+            .into_iter()
+            .map(|(k, v)| (k, Arc::new(tokio::sync::Mutex::new(v))))
+            .collect();
+
+        Ok(Self {
+            base_dir,
+            sessions: Mutex::new(sessions),
+        })
     }
 
-    pub fn get_or_create(&self, key: &str) -> Session {
-        let mut sessions = self.sessions.lock().expect("session lock poisoned");
-        sessions.entry(key.to_string())
-            .or_insert_with(|| Session {
-                key: key.to_string(),
-                messages: Vec::new(),
-                summary: None,
-                updated_at: Local::now(),
+    /// Returns a per-session lock. Caller should hold this across the entire
+    /// request lifecycle to prevent concurrent message loss.
+    pub fn get_or_create(&self, key: &str) -> Arc<tokio::sync::Mutex<Session>> {
+        let mut map = self.sessions.lock().expect("session map lock poisoned");
+        map.entry(key.to_string())
+            .or_insert_with(|| {
+                Arc::new(tokio::sync::Mutex::new(Session {
+                    key: key.to_string(),
+                    messages: Vec::new(),
+                    summary: None,
+                    updated_at: Local::now(),
+                }))
             })
             .clone()
     }
 
-    pub fn update_and_save(&self, key: &str, session: Session) -> Result<()> {
-        let mut sessions = self.sessions.lock().expect("session lock poisoned");
-        sessions.insert(key.to_string(), session);
-        let session = sessions.get(key).expect("just inserted");
-        self.save_to_disk(key, session)
-    }
-
-    fn save_to_disk(&self, key: &str, session: &Session) -> Result<()> {
+    /// Save session to disk. Does not acquire the session map lock.
+    pub fn save_to_disk(&self, key: &str, session: &Session) -> Result<()> {
         let dir = self.base_dir.join("sessions");
         std::fs::create_dir_all(&dir)?;
 
