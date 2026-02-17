@@ -160,8 +160,16 @@ header h1{font-size:16px;font-weight:600}
 .bubble pre{background:var(--pre-bg);color:var(--pre-text);padding:12px;border-radius:8px;overflow-x:auto;margin:8px 0;position:relative}
 .bubble pre code{background:none;padding:0;color:inherit}
 .bubble ul,.bubble ol{margin:4px 0 8px 20px}
+.bubble ol{list-style:decimal}
 .bubble li{margin:2px 0}
 .bubble a{color:#60a5fa;text-decoration:underline}
+.bubble h1,.bubble h2,.bubble h3{margin:12px 0 6px;line-height:1.3}
+.bubble h1{font-size:1.3em}.bubble h2{font-size:1.15em}.bubble h3{font-size:1.05em}
+.bubble hr{border:none;border-top:1px solid var(--border);margin:10px 0}
+.bubble blockquote{border-left:3px solid var(--text-muted);padding:2px 10px;margin:6px 0;color:var(--text-muted)}
+.bubble table{border-collapse:collapse;margin:8px 0;font-size:13px;width:100%}
+.bubble th,.bubble td{border:1px solid var(--border);padding:4px 8px;text-align:left}
+.bubble th{background:var(--code-bg);font-weight:600}
 .copy-btn{position:absolute;top:6px;right:6px;background:rgba(255,255,255,.15);border:none;color:#aaa;cursor:pointer;padding:3px 8px;border-radius:4px;font-size:11px}
 .copy-btn:hover{background:rgba(255,255,255,.3);color:#fff}
 .typing{display:flex;gap:10px;align-self:flex-start;max-width:85%}
@@ -284,29 +292,70 @@ function showError(msg){
 function escHtml(s){return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;")}
 
 function renderMd(src){
-  // code blocks
-  let html=escHtml(src);
-  html=html.replace(/```(\w*)\n([\s\S]*?)```/g,(_,lang,code)=>{
+  let h=escHtml(src);
+  // code blocks → placeholders
+  const cb=[];
+  h=h.replace(/```(\w*)\n([\s\S]*?)```/g,(_,lang,code)=>{
     const id="cb"+Math.random().toString(36).slice(2,8);
-    return '<pre><code class="lang-'+lang+'" id="'+id+'">'+code.replace(/\n$/,"")+'</code><button class="copy-btn" onclick="navigator.clipboard.writeText(document.getElementById(\''+id+'\').textContent)">copy</button></pre>';
+    cb.push('<pre><code class="lang-'+lang+'" id="'+id+'">'+code.replace(/\n$/,"")+'</code><button class="copy-btn" onclick="navigator.clipboard.writeText(document.getElementById(\''+id+'\').textContent)">copy</button></pre>');
+    return "\x00CB"+(cb.length-1)+"\x00";
   });
-  // inline code
-  html=html.replace(/`([^`]+)`/g,'<code>$1</code>');
-  // bold
-  html=html.replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>');
-  // italic
-  html=html.replace(/(?<!\*)\*([^*]+)\*(?!\*)/g,'<em>$1</em>');
-  // links
-  html=html.replace(/\[([^\]]+)\]\(([^)]+)\)/g,'<a href="$2" target="_blank" rel="noopener">$1</a>');
-  // unordered list
-  html=html.replace(/(^|\n)- (.+)/g,'$1<li>$2</li>');
-  html=html.replace(/((?:<li>.*<\/li>\n?)+)/g,'<ul>$1</ul>');
-  // paragraphs
-  html=html.replace(/\n{2,}/g,'</p><p>');
-  html=html.replace(/\n/g,'<br>');
-  html='<p>'+html+'</p>';
-  html=html.replace(/<p><\/p>/g,'');
-  return html;
+  // line-by-line block processing
+  const lines=h.split("\n"),out=[];
+  let tbl=[],inTbl=false;
+  function flushTbl(){
+    if(!tbl.length)return;
+    let t="<table>";
+    tbl.forEach((r,i)=>{
+      const cs=r.split("|").slice(1,-1);
+      if(!cs.length)return;
+      const tag=i===0?"th":"td";
+      t+="<tr>"+cs.map(c=>"<"+tag+">"+c.trim()+"</"+tag+">").join("")+"</tr>";
+    });
+    out.push(t+"</table>");tbl=[];inTbl=false;
+  }
+  for(let i=0;i<lines.length;i++){
+    const L=lines[i];
+    // table row
+    if(/^\|.+\|/.test(L)){
+      if(!inTbl)inTbl=true;
+      if(/^\|[\s\-:|]+\|$/.test(L))continue; // separator
+      tbl.push(L);continue;
+    }
+    if(inTbl)flushTbl();
+    // headers
+    if(/^#{1,3} /.test(L)){const lv=L.match(/^(#+)/)[1].length;out.push("<h"+lv+">"+L.slice(lv+1)+"</h"+lv+">");continue;}
+    // hr
+    if(/^-{3,}$/.test(L)){out.push("<hr>");continue;}
+    // blockquote (escaped >)
+    if(/^&gt; /.test(L)){out.push("<blockquote>"+L.slice(5)+"</blockquote>");continue;}
+    // ordered list
+    if(/^\d+\.\s/.test(L)){out.push("<oli>"+L.replace(/^\d+\.\s/,"")+"</oli>");continue;}
+    // unordered list
+    if(/^- /.test(L)){out.push("<uli>"+L.slice(2)+"</uli>");continue;}
+    out.push(L);
+  }
+  if(inTbl)flushTbl();
+  h=out.join("\n");
+  // wrap consecutive list items
+  h=h.replace(/((?:<uli>.*<\/uli>\n?)+)/g,m=>"<ul>"+m.replace(/<\/?uli>/g,s=>s.replace("uli","li"))+"</ul>");
+  h=h.replace(/((?:<oli>.*<\/oli>\n?)+)/g,m=>"<ol>"+m.replace(/<\/?oli>/g,s=>s.replace("oli","li"))+"</ol>");
+  // inline: code, bold, italic, links
+  h=h.replace(/`([^`]+)`/g,"<code>$1</code>");
+  h=h.replace(/\*\*(.+?)\*\*/g,"<strong>$1</strong>");
+  h=h.replace(/(?<!\*)\*([^*]+)\*(?!\*)/g,"<em>$1</em>");
+  h=h.replace(/\[([^\]]+)\]\(([^)]+)\)/g,'<a href="$2" target="_blank" rel="noopener">$1</a>');
+  // restore code blocks
+  cb.forEach((b,i)=>{h=h.replace("\x00CB"+i+"\x00",b);});
+  // paragraphs (skip block elements)
+  h=h.replace(/\n{2,}/g,"</p><p>");
+  h=h.replace(/\n/g,"<br>");
+  h="<p>"+h+"</p>";
+  h=h.replace(/<p><\/p>/g,"");
+  h=h.replace(/<p>(<(?:h[1-6]|hr|table|ul|ol|blockquote)[\s>])/g,"$1");
+  h=h.replace(/(<\/(?:h[1-6]|hr|table|ul|ol|blockquote)>)<\/p>/g,"$1");
+  h=h.replace(/<p>(<hr>)<\/p>/g,"$1");
+  return h;
 }
 
 inputEl.focus();
