@@ -18,12 +18,44 @@ struct McpState {
     api_key: Option<String>,
 }
 
-fn rpc_ok(id: Value, result: Value) -> Value {
+pub fn rpc_ok(id: Value, result: Value) -> Value {
     json!({"jsonrpc":"2.0","id":id,"result":result})
 }
 
-fn rpc_err(id: Value, code: i64, msg: &str) -> Value {
+pub fn rpc_err(id: Value, code: i64, msg: &str) -> Value {
     json!({"jsonrpc":"2.0","id":id,"error":{"code":code,"message":msg}})
+}
+
+/// Transport-agnostic JSON-RPC request handler.
+/// Used by both HTTP (axum) and stdio transports.
+pub async fn handle_request(registry: &ToolRegistry, name: &str, req: &Value) -> Value {
+    let id = req.get("id").cloned().unwrap_or(Value::Null);
+
+    if req["jsonrpc"].as_str() != Some("2.0") {
+        return rpc_err(id, -32600, "Invalid JSON-RPC version");
+    }
+
+    let method = match req["method"].as_str() {
+        Some(m) => m,
+        None => return rpc_err(id, -32600, "Missing or invalid 'method' field"),
+    };
+    let params = &req["params"];
+
+    let result = match method {
+        "initialize" => Ok(json!({
+            "protocolVersion": "2024-11-05",
+            "capabilities": { "tools": {} },
+            "serverInfo": { "name": name, "version": env!("CARGO_PKG_VERSION") }
+        })),
+        "tools/list" => Ok(json!({ "tools": registry.tool_defs_mcp() })),
+        "tools/call" => tools_call(registry, params).await,
+        _ => Err((-32601_i64, format!("Method not found: {method}"))),
+    };
+
+    match result {
+        Ok(v) => rpc_ok(id, v),
+        Err((code, msg)) => rpc_err(id, code, &msg),
+    }
 }
 
 pub async fn start(
@@ -71,41 +103,7 @@ async fn auth_layer(State(state): State<McpState>, req: Request, next: Next) -> 
 }
 
 async fn handle_rpc(State(state): State<McpState>, Json(req): Json<Value>) -> impl IntoResponse {
-    let id = req.get("id").cloned().unwrap_or(Value::Null);
-
-    if req["jsonrpc"].as_str() != Some("2.0") {
-        return (
-            StatusCode::OK,
-            Json(rpc_err(id, -32600, "Invalid JSON-RPC version")),
-        );
-    }
-
-    let method = match req["method"].as_str() {
-        Some(m) => m,
-        None => {
-            return (
-                StatusCode::OK,
-                Json(rpc_err(id, -32600, "Missing or invalid 'method' field")),
-            );
-        }
-    };
-    let params = &req["params"];
-
-    let result = match method {
-        "initialize" => Ok(json!({
-            "protocolVersion": "2024-11-05",
-            "capabilities": { "tools": {} },
-            "serverInfo": { "name": state.name, "version": env!("CARGO_PKG_VERSION") }
-        })),
-        "tools/list" => Ok(json!({ "tools": state.registry.tool_defs_mcp() })),
-        "tools/call" => tools_call(&state.registry, params).await,
-        _ => Err((-32601_i64, format!("Method not found: {method}"))),
-    };
-
-    let resp = match result {
-        Ok(v) => rpc_ok(id, v),
-        Err((code, msg)) => rpc_err(id, code, &msg),
-    };
+    let resp = handle_request(&state.registry, &state.name, &req).await;
     (StatusCode::OK, Json(resp))
 }
 

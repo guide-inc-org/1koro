@@ -8,9 +8,12 @@ mod session;
 mod tools;
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
+use serde_json::Value;
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
 use tokio::signal;
 
 use tools::ToolKind;
@@ -33,6 +36,22 @@ enum Commands {
     Run,
     Init,
     Status,
+    /// Chat with 1koro via the running API server
+    Chat {
+        /// Message to send (omit for interactive mode)
+        message: Option<String>,
+        /// API server URL
+        #[arg(long, default_value = "http://127.0.0.1:3000")]
+        url: String,
+        /// Auth token (or IKORO_AUTH_TOKEN env)
+        #[arg(long, env = "IKORO_AUTH_TOKEN")]
+        token: Option<String>,
+        /// Channel name
+        #[arg(long, default_value = "cli")]
+        channel: String,
+    },
+    /// Start MCP server on stdio (for Claude Code integration)
+    Mcp,
 }
 
 #[tokio::main]
@@ -58,6 +77,13 @@ async fn main() -> Result<()> {
                 memory::MemoryManager::new(&cfg.memory)?.read_core("state.md")?
             );
         }
+        Commands::Chat {
+            message,
+            url,
+            token,
+            channel,
+        } => chat(&url, token.as_deref(), &channel, message.as_deref()).await?,
+        Commands::Mcp => mcp_stdio(&cli.config).await?,
     }
     Ok(())
 }
@@ -150,6 +176,111 @@ async fn run(config_path: &str) -> Result<()> {
         })
         .await?;
     Ok(())
+}
+
+async fn mcp_stdio(config_path: &str) -> Result<()> {
+    let cfg = config::load(config_path)?;
+    let mem = Arc::new(memory::MemoryManager::new(&cfg.memory)?);
+    let ctx = tools::ToolContext {
+        memory: mem.clone(),
+        base_dir: cfg.memory.base_dir.clone(),
+    };
+    let mut reg = tools::ToolRegistry::new(ctx);
+    reg.add(ToolKind::SearchLogs);
+    reg.add(ToolKind::ReadCoreMemory);
+    reg.add(ToolKind::UpdateCoreMemory);
+    reg.add(ToolKind::AppendLog);
+    reg.add(ToolKind::ReadDailyLog);
+    reg.add(ToolKind::WriteSummary);
+    reg.add(ToolKind::ReadFile);
+    if cfg.tools.shell_enabled {
+        reg.add(ToolKind::Shell(Duration::from_secs(cfg.tools.shell_timeout)));
+    }
+    let reg = Arc::new(reg);
+
+    let stdin = tokio::io::BufReader::new(tokio::io::stdin());
+    let mut stdout = tokio::io::stdout();
+    let mut lines = stdin.lines();
+
+    while let Some(line) = lines.next_line().await? {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let req: Value = match serde_json::from_str(&line) {
+            Ok(v) => v,
+            Err(e) => {
+                let err = mcp::rpc_err(Value::Null, -32700, &format!("Parse error: {e}"));
+                let mut buf = serde_json::to_vec(&err)?;
+                buf.push(b'\n');
+                stdout.write_all(&buf).await?;
+                stdout.flush().await?;
+                continue;
+            }
+        };
+        // Notifications (no "id") — don't send a response
+        if req.get("id").is_none() {
+            continue;
+        }
+        let resp = mcp::handle_request(&reg, &cfg.agent.name, &req).await;
+        let mut buf = serde_json::to_vec(&resp)?;
+        buf.push(b'\n');
+        stdout.write_all(&buf).await?;
+        stdout.flush().await?;
+    }
+    Ok(())
+}
+
+async fn chat(url: &str, token: Option<&str>, channel: &str, message: Option<&str>) -> Result<()> {
+    let client = reqwest::Client::new();
+    if let Some(msg) = message {
+        println!("{}", send_message(&client, url, token, channel, msg).await?);
+        return Ok(());
+    }
+    // Interactive REPL
+    let stdin = std::io::stdin();
+    loop {
+        eprint!("1koro> ");
+        let mut line = String::new();
+        if stdin.read_line(&mut line)? == 0 {
+            break;
+        }
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        if matches!(line, "exit" | "quit") {
+            break;
+        }
+        match send_message(&client, url, token, channel, line).await {
+            Ok(text) => println!("\n{text}\n"),
+            Err(e) => eprintln!("Error: {e}"),
+        }
+    }
+    Ok(())
+}
+
+async fn send_message(
+    client: &reqwest::Client,
+    url: &str,
+    token: Option<&str>,
+    channel: &str,
+    text: &str,
+) -> Result<String> {
+    let mut req = client
+        .post(format!("{url}/message"))
+        .json(&serde_json::json!({"text": text, "channel": channel}));
+    if let Some(t) = token {
+        req = req.header("Authorization", format!("Bearer {t}"));
+    }
+    let resp = req.send().await?;
+    if !resp.status().is_success() {
+        anyhow::bail!("API error: {} {}", resp.status(), resp.text().await?);
+    }
+    let body: Value = resp.json().await?;
+    Ok(body["text"]
+        .as_str()
+        .unwrap_or("(no response)")
+        .to_string())
 }
 
 fn is_localhost(bind: &str) -> bool {
