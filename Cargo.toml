@@ -1,6 +1,6 @@
 [package]
 name = "ichikoro"
-version = "0.2.1"
+version = "0.3.0"
 edition = "2024"
 description = "Rust-powered personal AI agent that never forgets"
 license = "MIT"
