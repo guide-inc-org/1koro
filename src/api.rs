@@ -218,7 +218,7 @@ inputEl.addEventListener("input",()=>{
   sendBtn.disabled=!inputEl.value.trim()||sending;
 });
 inputEl.addEventListener("keydown",e=>{
-  if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();doSend()}
+  if(e.key==="Enter"&&!e.shiftKey&&!e.isComposing){e.preventDefault();doSend()}
 });
 sendBtn.addEventListener("click",doSend);
 
