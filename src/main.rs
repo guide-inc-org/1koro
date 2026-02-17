@@ -14,7 +14,6 @@ use std::sync::Arc;
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use tokio::signal;
-use tokio::sync::Mutex;
 
 #[derive(Parser)]
 #[command(name = "1koro", version, about = "Personal AI agent that never forgets")]
@@ -63,7 +62,10 @@ async fn run(config_path: &str) -> Result<()> {
 
     let tool_ctx = tools::ToolContext { memory: mem.clone(), base_dir: cfg.memory.base_dir.clone() };
     let mut reg = tools::ToolRegistry::new(tool_ctx);
-    reg.register(Box::new(tools::shell::ShellTool));
+    if cfg.tools.shell_enabled {
+        reg.register(Box::new(tools::shell::ShellTool));
+        tracing::warn!("Shell tool enabled — arbitrary command execution is possible");
+    }
     reg.register(Box::new(tools::memory::SearchLogsTool));
     reg.register(Box::new(tools::memory::ReadCoreMemoryTool));
     reg.register(Box::new(tools::memory::UpdateCoreMemoryTool));
@@ -79,10 +81,14 @@ async fn run(config_path: &str) -> Result<()> {
     let agent = agent::Agent::new(llm, mem.clone(), sessions, reg, skills);
 
     if cfg.mcp.enabled {
-        mcp::start(&cfg.mcp.bind, mem.clone(), &cfg.agent.name).await?;
+        mcp::start(&cfg.mcp.bind, mem.clone(), &cfg.agent.name, cfg.mcp.api_key.clone()).await?;
     }
 
-    let state = api::AppState { agent: Arc::new(Mutex::new(agent)), name: cfg.agent.name.clone() };
+    let state = api::AppState {
+        agent: Arc::new(agent),
+        name: cfg.agent.name.clone(),
+        api_key: cfg.api.api_key.clone(),
+    };
     let listener = tokio::net::TcpListener::bind(&cfg.api.bind).await?;
     tracing::info!("{} listening on {}", cfg.agent.name, cfg.api.bind);
 

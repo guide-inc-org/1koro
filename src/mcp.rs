@@ -1,8 +1,9 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use axum::extract::State;
+use axum::extract::{Request, State};
 use axum::http::StatusCode;
+use axum::middleware::{self, Next};
 use axum::response::IntoResponse;
 use axum::routing::post;
 use axum::{Json, Router};
@@ -48,11 +49,15 @@ impl JsonRpcResponse {
 struct McpState {
     memory: Arc<MemoryManager>,
     name: String,
+    api_key: Option<String>,
 }
 
-pub async fn start(bind: &str, memory: Arc<MemoryManager>, name: &str) -> Result<()> {
-    let state = McpState { memory, name: name.to_string() };
-    let app = Router::new().route("/mcp", post(handle_rpc)).with_state(state);
+pub async fn start(bind: &str, memory: Arc<MemoryManager>, name: &str, api_key: Option<String>) -> Result<()> {
+    let state = McpState { memory, name: name.to_string(), api_key };
+    let app = Router::new()
+        .route("/mcp", post(handle_rpc))
+        .layer(middleware::from_fn_with_state(state.clone(), auth_layer))
+        .with_state(state);
     let listener = tokio::net::TcpListener::bind(bind).await?;
     tracing::info!("MCP server listening on {bind}");
     tokio::spawn(async move {
@@ -61,6 +66,21 @@ pub async fn start(bind: &str, memory: Arc<MemoryManager>, name: &str) -> Result
         }
     });
     Ok(())
+}
+
+async fn auth_layer(State(state): State<McpState>, req: Request, next: Next) -> impl IntoResponse {
+    if let Some(ref expected) = state.api_key {
+        let auth_ok = req.headers()
+            .get("authorization")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.strip_prefix("Bearer "))
+            .is_some_and(|t| t == expected);
+        if !auth_ok {
+            let resp = JsonRpcResponse::err(serde_json::Value::Null, -32000, "Unauthorized".into());
+            return (StatusCode::UNAUTHORIZED, Json(resp)).into_response();
+        }
+    }
+    next.run(req).await.into_response()
 }
 
 async fn handle_rpc(State(state): State<McpState>, Json(req): Json<JsonRpcRequest>) -> impl IntoResponse {
@@ -105,7 +125,6 @@ async fn tools_call(state: &McpState, params: &serde_json::Value) -> Result<serd
         "read_core_memory" => state.memory.read_core(args["file"].as_str().unwrap_or("state.md")).map_err(|e| (-32000, e.to_string()))?,
         "update_core_memory" => {
             let file = args["file"].as_str().unwrap_or("state.md");
-            if file == "identity.md" { return Err((-32000, "identity.md is read-only".into())); }
             state.memory.write_core(file, args["content"].as_str().unwrap_or("")).map_err(|e| (-32000, e.to_string()))?;
             format!("Updated {file}")
         }

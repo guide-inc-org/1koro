@@ -12,6 +12,8 @@ pub struct Config {
     pub mcp: McpConfig,
     #[serde(default)]
     pub memory: MemoryConfig,
+    #[serde(default)]
+    pub tools: ToolsConfig,
 }
 
 #[derive(Debug, Deserialize)]
@@ -28,25 +30,22 @@ pub struct LlmConfig {
     pub max_tokens: u32,
 }
 
-fn default_max_tokens() -> u32 {
-    8192
-}
+fn default_max_tokens() -> u32 { 8192 }
 
 #[derive(Debug, Deserialize)]
 pub struct ApiConfig {
     #[serde(default = "default_api_bind")]
     pub bind: String,
+    pub api_key: Option<String>,
 }
 
 impl Default for ApiConfig {
     fn default() -> Self {
-        Self { bind: default_api_bind() }
+        Self { bind: default_api_bind(), api_key: None }
     }
 }
 
-fn default_api_bind() -> String {
-    "127.0.0.1:3000".to_string()
-}
+fn default_api_bind() -> String { "127.0.0.1:3000".to_string() }
 
 #[derive(Debug, Deserialize)]
 pub struct McpConfig {
@@ -54,16 +53,25 @@ pub struct McpConfig {
     pub enabled: bool,
     #[serde(default = "default_mcp_bind")]
     pub bind: String,
+    pub api_key: Option<String>,
 }
 
 impl Default for McpConfig {
     fn default() -> Self {
-        Self { enabled: false, bind: default_mcp_bind() }
+        Self { enabled: false, bind: default_mcp_bind(), api_key: None }
     }
 }
 
-fn default_mcp_bind() -> String {
-    "127.0.0.1:3001".to_string()
+fn default_mcp_bind() -> String { "127.0.0.1:3001".to_string() }
+
+#[derive(Debug, Deserialize)]
+pub struct ToolsConfig {
+    #[serde(default)]
+    pub shell_enabled: bool,
+}
+
+impl Default for ToolsConfig {
+    fn default() -> Self { Self { shell_enabled: false } }
 }
 
 #[derive(Debug, Deserialize)]
@@ -101,7 +109,7 @@ pub async fn init_config_dir() -> Result<()> {
     write_if_missing(base.join("core/identity.md"), "# Identity\n\nI am 1koro, a personal AI agent. I remember everything.\n").await?;
     write_if_missing(base.join("core/user.md"), "# User\n\n(Not yet configured)\n").await?;
     write_if_missing(base.join("core/state.md"), "# State\n\n(No state yet)\n").await?;
-    write_if_missing(base.join("config.toml"), "[agent]\nname = \"1koro\"\n\n[llm]\nprovider = \"openrouter\"\nmodel = \"google/gemini-2.5-flash\"\napi_key = \"YOUR_API_KEY\"\nmax_tokens = 8192\n\n[api]\nbind = \"127.0.0.1:3000\"\n\n[mcp]\nenabled = false\nbind = \"127.0.0.1:3001\"\n").await?;
+    write_if_missing(base.join("config.toml"), "[agent]\nname = \"1koro\"\n\n[llm]\nmodel = \"google/gemini-2.5-flash\"\napi_key = \"YOUR_API_KEY\"\nmax_tokens = 8192\n\n[api]\nbind = \"127.0.0.1:3000\"\n# api_key = \"your-secret-key\"\n\n[mcp]\nenabled = false\nbind = \"127.0.0.1:3001\"\n\n[tools]\nshell_enabled = false\n").await?;
     Ok(())
 }
 

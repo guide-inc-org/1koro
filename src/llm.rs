@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use reqwest::Client;
@@ -76,7 +77,7 @@ pub struct LlmResponse {
     pub tool_calls: Vec<ToolCall>,
 }
 
-// --- Trait (for future Bedrock support) ---
+// --- Trait ---
 
 #[async_trait::async_trait]
 pub trait LlmClient: Send + Sync {
@@ -161,7 +162,10 @@ pub fn create_client(config: &LlmConfig) -> Result<Arc<dyn LlmClient>> {
         .unwrap_or_else(|| "https://openrouter.ai/api/v1".to_string());
 
     Ok(Arc::new(OpenRouterClient {
-        client: Client::new(),
+        client: Client::builder()
+            .connect_timeout(Duration::from_secs(10))
+            .timeout(Duration::from_secs(120))
+            .build()?,
         base_url: base_url.trim_end_matches('/').to_string(),
         api_key: config.api_key.clone(),
         model: config.model.clone(),

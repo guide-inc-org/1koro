@@ -44,19 +44,22 @@ impl ToolRegistry {
     }
 
     pub fn tool_defs(&self) -> Vec<ToolDef> {
-        self.tools.values().map(|t| ToolDef {
+        let mut defs: Vec<_> = self.tools.values().map(|t| ToolDef {
             type_: "function".into(),
             function: FunctionDef {
                 name: t.name().into(),
                 description: t.description().into(),
                 parameters: t.parameters(),
             },
-        }).collect()
+        }).collect();
+        defs.sort_by(|a, b| a.function.name.cmp(&b.function.name));
+        defs
     }
 
     pub async fn execute(&self, name: &str, args_json: &str) -> Result<ToolResult> {
         let tool = self.tools.get(name).ok_or_else(|| anyhow::anyhow!("Unknown tool: {name}"))?;
-        let args: Value = serde_json::from_str(args_json).unwrap_or(Value::Object(Default::default()));
+        let args: Value = serde_json::from_str(args_json)
+            .map_err(|e| anyhow::anyhow!("Invalid tool arguments for {name}: {e}"))?;
         tool.execute(args, &self.ctx).await
     }
 }

@@ -1,19 +1,20 @@
 use std::sync::Arc;
 
-use axum::extract::State;
+use axum::extract::{Request, State};
 use axum::http::StatusCode;
+use axum::middleware::{self, Next};
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
-use tokio::sync::Mutex;
 
 use crate::agent::Agent;
 
 #[derive(Clone)]
 pub struct AppState {
-    pub agent: Arc<Mutex<Agent>>,
+    pub agent: Arc<Agent>,
     pub name: String,
+    pub api_key: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -39,12 +40,28 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/message", post(handle_message))
         .route("/health", get(handle_health))
+        .layer(middleware::from_fn_with_state(state.clone(), auth_layer))
         .with_state(state)
 }
 
+async fn auth_layer(State(state): State<AppState>, req: Request, next: Next) -> impl IntoResponse {
+    if let Some(ref expected) = state.api_key {
+        if req.uri().path() != "/health" {
+            let auth_ok = req.headers()
+                .get("authorization")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.strip_prefix("Bearer "))
+                .is_some_and(|t| t == expected);
+            if !auth_ok {
+                return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error": "Unauthorized"}))).into_response();
+            }
+        }
+    }
+    next.run(req).await.into_response()
+}
+
 async fn handle_message(State(state): State<AppState>, Json(req): Json<MessageRequest>) -> impl IntoResponse {
-    let mut agent = state.agent.lock().await;
-    match agent.handle_message(&req.text, &req.channel, &req.user).await {
+    match state.agent.handle_message(&req.text, &req.channel, &req.user).await {
         Ok(resp) => (StatusCode::OK, Json(MessageResponse {
             text: resp.text.unwrap_or_else(|| "(no response)".into()),
             actions: resp.actions,

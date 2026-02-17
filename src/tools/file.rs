@@ -8,9 +8,9 @@ pub struct ReadFileTool;
 #[async_trait::async_trait]
 impl Tool for ReadFileTool {
     fn name(&self) -> &str { "read_file" }
-    fn description(&self) -> &str { "Read file contents. Use for loading skill details or workspace files." }
+    fn description(&self) -> &str { "Read file contents within the workspace directory." }
     fn parameters(&self) -> Value {
-        json!({ "type": "object", "properties": { "path": { "type": "string", "description": "File path (absolute or relative to workspace)" } }, "required": ["path"] })
+        json!({ "type": "object", "properties": { "path": { "type": "string", "description": "File path relative to workspace" } }, "required": ["path"] })
     }
     async fn execute(&self, args: Value, ctx: &ToolContext) -> Result<ToolResult> {
         let path_str = args["path"].as_str().unwrap_or("");
@@ -19,7 +19,20 @@ impl Tool for ReadFileTool {
         } else {
             ctx.base_dir.join(path_str)
         };
-        match std::fs::read_to_string(&path) {
+
+        let canonical = match path.canonicalize() {
+            Ok(p) => p,
+            Err(e) => return Ok(ToolResult { for_llm: format!("Error: cannot resolve path: {e}") }),
+        };
+        let base_canonical = match ctx.base_dir.canonicalize() {
+            Ok(p) => p,
+            Err(e) => return Ok(ToolResult { for_llm: format!("Error: cannot resolve base dir: {e}") }),
+        };
+        if !canonical.starts_with(&base_canonical) {
+            return Ok(ToolResult { for_llm: format!("Error: path outside workspace: {}", path.display()) });
+        }
+
+        match std::fs::read_to_string(&canonical) {
             Ok(content) => Ok(ToolResult { for_llm: content }),
             Err(e) => Ok(ToolResult { for_llm: format!("Error reading {}: {e}", path.display()) }),
         }

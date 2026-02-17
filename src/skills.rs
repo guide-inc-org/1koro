@@ -53,6 +53,7 @@ impl SkillLoader {
             }
         }
 
+        skills.sort_by(|a, b| a.name.cmp(&b.name));
         Ok(skills)
     }
 }
