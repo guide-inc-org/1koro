@@ -1,18 +1,112 @@
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::Result;
-use chrono::Local;
+use chrono::{Datelike, Local};
 
-use crate::context::ContextBuilder;
 use crate::llm::{LlmClient, Message};
 use crate::memory::MemoryManager;
 use crate::session::{Session, SessionStore};
-use crate::skills::SkillSummary;
 use crate::tools::ToolRegistry;
 
 const MAX_TOOL_ITERATIONS: usize = 10;
 const SESSION_COMPRESS_THRESHOLD: usize = 20;
 const MAX_SUMMARY_LENGTH: usize = 2000;
+
+// --- Skills (merged from skills.rs) ---
+
+pub struct SkillSummary {
+    pub name: String,
+    pub description: String,
+    pub path: PathBuf,
+}
+
+pub fn load_skills(base_dir: &Path) -> Result<Vec<SkillSummary>> {
+    let dir = base_dir.join("skills");
+    let mut skills = Vec::new();
+    if !dir.exists() {
+        return Ok(skills);
+    }
+    for entry in std::fs::read_dir(&dir)?.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            let skill_file = path.join("SKILL.md");
+            if skill_file.exists() {
+                let content = std::fs::read_to_string(&skill_file)?;
+                let name = path
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string();
+                let description = content
+                    .lines()
+                    .find(|l| !l.starts_with('#') && !l.trim().is_empty())
+                    .unwrap_or("")
+                    .to_string();
+                skills.push(SkillSummary {
+                    name,
+                    description,
+                    path: skill_file,
+                });
+            }
+        }
+    }
+    skills.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(skills)
+}
+
+// --- Context building (merged from context.rs) ---
+
+fn build_system_prompt(memory: &MemoryManager, skills: &[SkillSummary]) -> Result<String> {
+    let mut p = String::new();
+    p.push_str(&memory.read_core("identity.md").unwrap_or_default());
+    p.push_str("\n\n---\n\n");
+    p.push_str(&memory.read_core("user.md").unwrap_or_default());
+    p.push_str("\n\n---\n\n");
+    p.push_str(&memory.read_core("state.md").unwrap_or_default());
+
+    let now = Local::now();
+    if let Ok(Some(m)) = memory.read_monthly_summary(&now.format("%Y-%m").to_string()) {
+        p.push_str("\n\n---\n\n# This Month\n\n");
+        p.push_str(&m);
+    }
+    let week_id = format!("{}-W{:02}", now.year(), now.iso_week().week());
+    if let Ok(Some(w)) = memory.read_weekly_summary(&week_id) {
+        p.push_str("\n\n---\n\n# This Week\n\n");
+        p.push_str(&w);
+    }
+
+    p.push_str("\n\n---\n\nYou have access to tools. Use them to search memory, execute commands, or read files.\n");
+    if !skills.is_empty() {
+        p.push_str("\n# Available Skills\n\n");
+        for s in skills {
+            p.push_str(&format!(
+                "- **{}**: {} (use `read_file` to load: {})\n",
+                s.name,
+                s.description,
+                s.path.display()
+            ));
+        }
+    }
+    Ok(p)
+}
+
+fn build_messages(
+    memory: &MemoryManager,
+    session: &Session,
+    skills: &[SkillSummary],
+) -> Result<Vec<Message>> {
+    let mut messages = vec![Message::system(build_system_prompt(memory, skills)?)];
+    if let Some(summary) = &session.summary {
+        messages.push(Message::system(format!(
+            "Previous conversation summary:\n{summary}"
+        )));
+    }
+    messages.extend(session.messages.iter().cloned());
+    Ok(messages)
+}
+
+// --- Agent ---
 
 pub struct AgentResponse {
     pub text: Option<String>,
@@ -20,7 +114,7 @@ pub struct AgentResponse {
 }
 
 pub struct Agent {
-    llm: Arc<dyn LlmClient>,
+    llm: Arc<LlmClient>,
     memory: Arc<MemoryManager>,
     sessions: SessionStore,
     tools: ToolRegistry,
@@ -29,7 +123,7 @@ pub struct Agent {
 
 impl Agent {
     pub fn new(
-        llm: Arc<dyn LlmClient>,
+        llm: Arc<LlmClient>,
         memory: Arc<MemoryManager>,
         sessions: SessionStore,
         tools: ToolRegistry,
@@ -53,7 +147,6 @@ impl Agent {
         let key = format!("{channel}:{user}");
         tracing::info!("[{key}] {user}: {text}");
 
-        // Hold per-session lock for the entire request to prevent message loss
         let session_lock = self.sessions.get_or_create(&key);
         let mut session = session_lock.lock().await;
 
@@ -62,7 +155,6 @@ impl Agent {
             self.sessions.save_to_disk(&key, &session)?;
         }
 
-        // Persist user input immediately so it's never lost, even if tool_loop fails
         session.messages.push(Message::user(text));
         session.updated_at = Local::now();
         self.sessions.save_to_disk(&key, &session)?;
@@ -71,14 +163,13 @@ impl Agent {
             tracing::warn!("Failed to append log: {e}");
         }
 
-        let messages = ContextBuilder::build_messages(&self.memory, &session, &self.skills)?;
+        let messages = build_messages(&self.memory, &session, &self.skills)?;
         let (response_text, new_messages) = self.tool_loop(messages).await?;
 
         session.messages.extend(new_messages);
         session.updated_at = Local::now();
         self.sessions.save_to_disk(&key, &session)?;
-
-        drop(session); // Release session lock before logging
+        drop(session);
 
         if let Some(r) = &response_text
             && let Err(e) = self.memory.append_log(&format!("[{key}] 1koro: {r}"))

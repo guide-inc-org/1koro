@@ -21,65 +21,37 @@ pub struct Message {
 }
 
 impl Message {
-    pub fn system(content: impl Into<String>) -> Self {
+    fn new(
+        role: &str,
+        content: Option<String>,
+        tc: Option<Vec<ToolCall>>,
+        tid: Option<String>,
+    ) -> Self {
         Self {
-            role: "system".into(),
-            content: Some(content.into()),
-            tool_calls: None,
-            tool_call_id: None,
-        }
-    }
-    pub fn user(content: impl Into<String>) -> Self {
-        Self {
-            role: "user".into(),
-            content: Some(content.into()),
-            tool_calls: None,
-            tool_call_id: None,
-        }
-    }
-    pub fn assistant(content: impl Into<String>) -> Self {
-        Self {
-            role: "assistant".into(),
-            content: Some(content.into()),
-            tool_calls: None,
-            tool_call_id: None,
-        }
-    }
-    pub fn assistant_with_tool_calls(content: Option<String>, tool_calls: Vec<ToolCall>) -> Self {
-        Self {
-            role: "assistant".into(),
+            role: role.into(),
             content,
-            tool_calls: Some(tool_calls),
-            tool_call_id: None,
+            tool_calls: tc,
+            tool_call_id: tid,
         }
     }
-    pub fn tool_result(id: impl Into<String>, content: impl Into<String>) -> Self {
-        Self {
-            role: "tool".into(),
-            content: Some(content.into()),
-            tool_calls: None,
-            tool_call_id: Some(id.into()),
-        }
+    pub fn system(c: impl Into<String>) -> Self {
+        Self::new("system", Some(c.into()), None, None)
+    }
+    pub fn user(c: impl Into<String>) -> Self {
+        Self::new("user", Some(c.into()), None, None)
+    }
+    pub fn assistant(c: impl Into<String>) -> Self {
+        Self::new("assistant", Some(c.into()), None, None)
+    }
+    pub fn assistant_with_tool_calls(c: Option<String>, tc: Vec<ToolCall>) -> Self {
+        Self::new("assistant", c, Some(tc), None)
+    }
+    pub fn tool_result(id: impl Into<String>, c: impl Into<String>) -> Self {
+        Self::new("tool", Some(c.into()), None, Some(id.into()))
     }
 }
 
-// --- Tool definitions ---
-
-#[derive(Debug, Clone, Serialize)]
-pub struct ToolDef {
-    #[serde(rename = "type")]
-    pub type_: String,
-    pub function: FunctionDef,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct FunctionDef {
-    pub name: String,
-    pub description: String,
-    pub parameters: serde_json::Value,
-}
-
-// --- Tool calls ---
+// --- Tool calls (for deserialization) ---
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolCall {
@@ -102,16 +74,9 @@ pub struct LlmResponse {
     pub tool_calls: Vec<ToolCall>,
 }
 
-// --- Trait ---
+// --- Client (concrete, no trait) ---
 
-#[async_trait::async_trait]
-pub trait LlmClient: Send + Sync {
-    async fn chat(&self, messages: Vec<Message>, tools: Option<&[ToolDef]>) -> Result<LlmResponse>;
-}
-
-// --- OpenRouter / OpenAI-compatible client ---
-
-pub struct OpenRouterClient {
+pub struct LlmClient {
     client: Client,
     base_url: String,
     api_key: String,
@@ -125,19 +90,17 @@ struct ChatRequest {
     messages: Vec<Message>,
     max_tokens: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
-    tools: Option<Vec<ToolDef>>,
+    tools: Option<Vec<serde_json::Value>>,
 }
 
 #[derive(Deserialize)]
 struct ChatResponse {
     choices: Vec<Choice>,
 }
-
 #[derive(Deserialize)]
 struct Choice {
     message: ChoiceMessage,
 }
-
 #[derive(Deserialize)]
 struct ChoiceMessage {
     content: Option<String>,
@@ -147,9 +110,12 @@ struct ChoiceMessage {
 
 const MAX_RETRIES: u32 = 2;
 
-#[async_trait::async_trait]
-impl LlmClient for OpenRouterClient {
-    async fn chat(&self, messages: Vec<Message>, tools: Option<&[ToolDef]>) -> Result<LlmResponse> {
+impl LlmClient {
+    pub async fn chat(
+        &self,
+        messages: Vec<Message>,
+        tools: Option<&[serde_json::Value]>,
+    ) -> Result<LlmResponse> {
         let url = format!("{}/chat/completions", self.base_url);
         let request = ChatRequest {
             model: self.model.clone(),
@@ -161,7 +127,7 @@ impl LlmClient for OpenRouterClient {
         let mut last_err = None;
         for attempt in 0..=MAX_RETRIES {
             if attempt > 0 {
-                let delay = Duration::from_secs(1 << (attempt - 1)); // 1s, 2s
+                let delay = Duration::from_secs(1 << (attempt - 1));
                 tracing::warn!("LLM retry {attempt}/{MAX_RETRIES} after {delay:?}");
                 tokio::time::sleep(delay).await;
             }
@@ -214,13 +180,13 @@ impl LlmClient for OpenRouterClient {
 
 // --- Factory ---
 
-pub fn create_client(config: &LlmConfig) -> Result<Arc<dyn LlmClient>> {
+pub fn create_client(config: &LlmConfig) -> Result<Arc<LlmClient>> {
     let base_url = config
         .base_url
         .clone()
         .unwrap_or_else(|| "https://openrouter.ai/api/v1".to_string());
 
-    Ok(Arc::new(OpenRouterClient {
+    Ok(Arc::new(LlmClient {
         client: Client::builder()
             .connect_timeout(Duration::from_secs(10))
             .timeout(Duration::from_secs(120))

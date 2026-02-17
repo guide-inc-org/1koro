@@ -1,91 +1,54 @@
 use std::time::Duration;
 
 use anyhow::Result;
-use serde_json::{Value, json};
+use serde_json::Value;
 use tokio::process::Command;
 
-use super::{Tool, ToolContext, ToolResult};
+use super::{ToolContext, ToolResult, ok, require_str};
 
-pub struct ShellTool {
-    timeout: Duration,
-}
+pub async fn execute(args: &Value, ctx: &ToolContext, timeout: Duration) -> Result<ToolResult> {
+    let cmd = require_str(args, "command")?;
 
-impl ShellTool {
-    pub fn new(timeout_secs: u64) -> Self {
-        Self {
-            timeout: Duration::from_secs(timeout_secs),
-        }
-    }
-}
+    let child = Command::new("sh")
+        .arg("-c")
+        .arg(cmd)
+        .current_dir(&ctx.base_dir)
+        .process_group(0)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| anyhow::anyhow!("Shell spawn error: {e}"))?;
 
-#[async_trait::async_trait]
-impl Tool for ShellTool {
-    fn name(&self) -> &str {
-        "shell"
-    }
-    fn description(&self) -> &str {
-        "Execute a shell command (runs in memory directory)"
-    }
-    fn parameters(&self) -> Value {
-        json!({ "type": "object", "properties": { "command": { "type": "string", "description": "Shell command to execute" } }, "required": ["command"] })
-    }
-    async fn execute(&self, args: Value, ctx: &ToolContext) -> Result<ToolResult> {
-        let cmd = args["command"]
-            .as_str()
-            .ok_or_else(|| anyhow::anyhow!("Missing 'command'"))?;
+    let pgid = child.id().unwrap_or(0) as i32;
 
-        let child = Command::new("sh")
-            .arg("-c")
-            .arg(cmd)
-            .current_dir(&ctx.base_dir)
-            .process_group(0)
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .spawn()
-            .map_err(|e| anyhow::anyhow!("Shell spawn error: {e}"))?;
-
-        let pgid = child.id().unwrap_or(0) as i32;
-
-        let output = match tokio::time::timeout(self.timeout, child.wait_with_output()).await {
-            Ok(Ok(output)) => output,
-            Ok(Err(e)) => {
-                return Ok(ToolResult {
-                    for_llm: format!("Shell error: {e}"),
-                });
-            }
-            Err(_) => {
-                if pgid > 0 {
-                    let kill_ret = unsafe { libc::killpg(pgid, libc::SIGKILL) };
-                    if kill_ret != 0 {
-                        tracing::warn!(
-                            "killpg({pgid}) failed: {}",
-                            std::io::Error::last_os_error()
-                        );
-                    }
-                    for _ in 0..3 {
-                        let ret =
-                            unsafe { libc::waitpid(-pgid, std::ptr::null_mut(), libc::WNOHANG) };
-                        if ret != 0 {
-                            break;
-                        }
-                        tokio::time::sleep(Duration::from_millis(10)).await;
-                    }
+    let output = match tokio::time::timeout(timeout, child.wait_with_output()).await {
+        Ok(Ok(output)) => output,
+        Ok(Err(e)) => return ok(format!("Shell error: {e}")),
+        Err(_) => {
+            if pgid > 0 {
+                let ret = unsafe { libc::killpg(pgid, libc::SIGKILL) };
+                if ret != 0 {
+                    tracing::warn!("killpg({pgid}) failed: {}", std::io::Error::last_os_error());
                 }
-                return Ok(ToolResult {
-                    for_llm: format!("Shell timeout after {}s", self.timeout.as_secs()),
-                });
+                for _ in 0..3 {
+                    let r = unsafe { libc::waitpid(-pgid, std::ptr::null_mut(), libc::WNOHANG) };
+                    if r != 0 {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
             }
-        };
+            return ok(format!("Shell timeout after {}s", timeout.as_secs()));
+        }
+    };
 
-        let text = if output.status.success() {
-            String::from_utf8_lossy(&output.stdout).to_string()
-        } else {
-            format!(
-                "Error (exit {}): {}",
-                output.status,
-                String::from_utf8_lossy(&output.stderr)
-            )
-        };
-        Ok(ToolResult { for_llm: text })
+    if output.status.success() {
+        ok(String::from_utf8_lossy(&output.stdout).to_string())
+    } else {
+        ok(format!(
+            "Error (exit {}): {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        ))
     }
 }

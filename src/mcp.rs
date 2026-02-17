@@ -7,59 +7,23 @@ use axum::middleware::{self, Next};
 use axum::response::IntoResponse;
 use axum::routing::post;
 use axum::{Json, Router};
-use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
 
 use crate::tools::ToolRegistry;
-
-#[derive(Deserialize)]
-struct JsonRpcRequest {
-    jsonrpc: String,
-    id: Option<serde_json::Value>,
-    method: String,
-    #[serde(default)]
-    params: serde_json::Value,
-}
-
-#[derive(Serialize)]
-struct JsonRpcResponse {
-    jsonrpc: String,
-    id: serde_json::Value,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    result: Option<serde_json::Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    error: Option<JsonRpcError>,
-}
-
-#[derive(Serialize)]
-struct JsonRpcError {
-    code: i64,
-    message: String,
-}
-
-impl JsonRpcResponse {
-    fn ok(id: serde_json::Value, result: serde_json::Value) -> Self {
-        Self {
-            jsonrpc: "2.0".into(),
-            id,
-            result: Some(result),
-            error: None,
-        }
-    }
-    fn err(id: serde_json::Value, code: i64, msg: String) -> Self {
-        Self {
-            jsonrpc: "2.0".into(),
-            id,
-            result: None,
-            error: Some(JsonRpcError { code, message: msg }),
-        }
-    }
-}
 
 #[derive(Clone)]
 struct McpState {
     registry: Arc<ToolRegistry>,
     name: String,
     api_key: Option<String>,
+}
+
+fn rpc_ok(id: Value, result: Value) -> Value {
+    json!({"jsonrpc":"2.0","id":id,"result":result})
+}
+
+fn rpc_err(id: Value, code: i64, msg: &str) -> Value {
+    json!({"jsonrpc":"2.0","id":id,"error":{"code":code,"message":msg}})
 }
 
 pub async fn start(
@@ -96,75 +60,57 @@ async fn auth_layer(State(state): State<McpState>, req: Request, next: Next) -> 
             .and_then(|v| v.strip_prefix("Bearer "))
             .is_some_and(|t| t == expected);
         if !auth_ok {
-            let resp = JsonRpcResponse::err(serde_json::Value::Null, -32000, "Unauthorized".into());
-            return (StatusCode::UNAUTHORIZED, Json(resp)).into_response();
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(rpc_err(Value::Null, -32000, "Unauthorized")),
+            )
+                .into_response();
         }
     }
     next.run(req).await.into_response()
 }
 
-async fn handle_rpc(
-    State(state): State<McpState>,
-    Json(req): Json<JsonRpcRequest>,
-) -> impl IntoResponse {
-    let id = req.id.unwrap_or(serde_json::Value::Null);
-    if req.jsonrpc != "2.0" {
+async fn handle_rpc(State(state): State<McpState>, Json(req): Json<Value>) -> impl IntoResponse {
+    let id = req.get("id").cloned().unwrap_or(Value::Null);
+
+    if req["jsonrpc"].as_str() != Some("2.0") {
         return (
             StatusCode::OK,
-            Json(JsonRpcResponse::err(
-                id,
-                -32600,
-                "Invalid JSON-RPC version".into(),
-            )),
+            Json(rpc_err(id, -32600, "Invalid JSON-RPC version")),
         );
     }
-    let result = match req.method.as_str() {
-        "initialize" => Ok(serde_json::json!({
+
+    let method = req["method"].as_str().unwrap_or("");
+    let params = &req["params"];
+
+    let result = match method {
+        "initialize" => Ok(json!({
             "protocolVersion": "2024-11-05",
             "capabilities": { "tools": {} },
             "serverInfo": { "name": state.name, "version": env!("CARGO_PKG_VERSION") }
         })),
-        "tools/list" => Ok(serde_json::json!({ "tools": tools_list(&state.registry) })),
-        "tools/call" => tools_call(&state.registry, &req.params).await,
-        _ => Err((-32601, format!("Method not found: {}", req.method))),
+        "tools/list" => Ok(json!({ "tools": state.registry.tool_defs_mcp() })),
+        "tools/call" => tools_call(&state.registry, params).await,
+        _ => Err((-32601_i64, format!("Method not found: {method}"))),
     };
+
     let resp = match result {
-        Ok(v) => JsonRpcResponse::ok(id, v),
-        Err((code, msg)) => JsonRpcResponse::err(id, code as i64, msg),
+        Ok(v) => rpc_ok(id, v),
+        Err((code, msg)) => rpc_err(id, code, &msg),
     };
     (StatusCode::OK, Json(resp))
 }
 
-/// Generate MCP tool list from ToolRegistry (single source of truth).
-fn tools_list(registry: &ToolRegistry) -> serde_json::Value {
-    let tools: Vec<serde_json::Value> = registry
-        .tool_defs()
-        .iter()
-        .map(|td| {
-            serde_json::json!({
-                "name": td.function.name,
-                "description": td.function.description,
-                "inputSchema": td.function.parameters,
-            })
-        })
-        .collect();
-    serde_json::json!(tools)
-}
-
-/// Execute tool via ToolRegistry (same validation as agent tools).
-async fn tools_call(
-    registry: &ToolRegistry,
-    params: &serde_json::Value,
-) -> Result<serde_json::Value, (i32, String)> {
+async fn tools_call(registry: &ToolRegistry, params: &Value) -> Result<Value, (i64, String)> {
     let name = params["name"]
         .as_str()
-        .ok_or((-32602, "Missing tool name".into()))?;
+        .ok_or((-32602_i64, "Missing tool name".into()))?;
     let args = &params["arguments"];
     let args_json =
-        serde_json::to_string(args).map_err(|e| (-32602, format!("Invalid arguments: {e}")))?;
+        serde_json::to_string(args).map_err(|e| (-32602_i64, format!("Invalid arguments: {e}")))?;
     let result = registry
         .execute(name, &args_json)
         .await
-        .map_err(|e| (-32000, e.to_string()))?;
-    Ok(serde_json::json!({ "content": [{ "type": "text", "text": result.for_llm }] }))
+        .map_err(|e| (-32000_i64, e.to_string()))?;
+    Ok(json!({ "content": [{ "type": "text", "text": result.for_llm }] }))
 }

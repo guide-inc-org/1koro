@@ -1,12 +1,10 @@
 mod agent;
 mod api;
 mod config;
-mod context;
 mod llm;
 mod mcp;
 mod memory;
 mod session;
-mod skills;
 mod tools;
 
 use std::sync::Arc;
@@ -14,6 +12,8 @@ use std::sync::Arc;
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use tokio::signal;
+
+use tools::ToolKind;
 
 #[derive(Parser)]
 #[command(
@@ -73,7 +73,7 @@ async fn run(config_path: &str) -> Result<()> {
     };
     let mut reg = tools::ToolRegistry::new(tool_ctx);
     if cfg.tools.shell_enabled {
-        reg.register(Box::new(tools::shell::ShellTool::new(
+        reg.add(ToolKind::Shell(std::time::Duration::from_secs(
             cfg.tools.shell_timeout,
         )));
         tracing::warn!(
@@ -81,15 +81,15 @@ async fn run(config_path: &str) -> Result<()> {
             cfg.tools.shell_timeout
         );
     }
-    reg.register(Box::new(tools::memory::SearchLogsTool));
-    reg.register(Box::new(tools::memory::ReadCoreMemoryTool));
-    reg.register(Box::new(tools::memory::UpdateCoreMemoryTool));
-    reg.register(Box::new(tools::memory::AppendLogTool));
-    reg.register(Box::new(tools::memory::ReadDailyLogTool));
-    reg.register(Box::new(tools::memory::WriteSummaryTool));
-    reg.register(Box::new(tools::file::ReadFileTool));
+    reg.add(ToolKind::SearchLogs);
+    reg.add(ToolKind::ReadCoreMemory);
+    reg.add(ToolKind::UpdateCoreMemory);
+    reg.add(ToolKind::AppendLog);
+    reg.add(ToolKind::ReadDailyLog);
+    reg.add(ToolKind::WriteSummary);
+    reg.add(ToolKind::ReadFile);
 
-    let skills = skills::SkillLoader::new(&cfg.memory.base_dir).load_summaries()?;
+    let skills = agent::load_skills(&cfg.memory.base_dir)?;
     if !skills.is_empty() {
         tracing::info!("Loaded {} skills", skills.len());
     }
@@ -109,10 +109,10 @@ async fn run(config_path: &str) -> Result<()> {
             base_dir: cfg.memory.base_dir.clone(),
         };
         let mut mcp_reg = tools::ToolRegistry::new(mcp_ctx);
-        mcp_reg.register(Box::new(tools::memory::SearchLogsTool));
-        mcp_reg.register(Box::new(tools::memory::ReadCoreMemoryTool));
-        mcp_reg.register(Box::new(tools::memory::UpdateCoreMemoryTool));
-        mcp_reg.register(Box::new(tools::memory::ReadDailyLogTool));
+        mcp_reg.add(ToolKind::SearchLogs);
+        mcp_reg.add(ToolKind::ReadCoreMemory);
+        mcp_reg.add(ToolKind::UpdateCoreMemory);
+        mcp_reg.add(ToolKind::ReadDailyLog);
         mcp::start(
             &cfg.mcp.bind,
             Arc::new(mcp_reg),
@@ -155,11 +155,9 @@ async fn run(config_path: &str) -> Result<()> {
 fn is_localhost(bind: &str) -> bool {
     use std::net::IpAddr;
 
-    // Extract the host part (before the last ':port')
     let host = if let Some(inner) = bind.strip_prefix('[')
         && let Some(bracket_end) = inner.find(']')
     {
-        // IPv6 bracket notation: [::1]:3000 → ::1
         &inner[..bracket_end]
     } else if let Some(colon) = bind.rfind(':') {
         &bind[..colon]
@@ -170,7 +168,6 @@ fn is_localhost(bind: &str) -> bool {
     if host == "localhost" {
         return true;
     }
-    // Parse as IP address and check is_loopback (covers 127.0.0.0/8 and ::1)
     host.parse::<IpAddr>().is_ok_and(|ip| ip.is_loopback())
 }
 
@@ -195,13 +192,11 @@ mod tests {
         assert!(!is_localhost("localhost.evil.com:3000"));
         assert!(!is_localhost("127.evil.com:3000"));
         assert!(!is_localhost("127.0.0.evil:3000"));
-        // Invalid IP format must not be treated as loopback
         assert!(!is_localhost("127.0.0.1.1:3000"));
     }
 
     #[test]
     fn test_is_localhost_malformed_no_panic() {
-        // Must not panic on any malformed input
         assert!(!is_localhost("]"));
         assert!(!is_localhost("[]"));
         assert!(!is_localhost("["));
